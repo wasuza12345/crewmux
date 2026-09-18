@@ -70,6 +70,8 @@ export function chromeCommands({ cli, cwd }: ChromeInput): string[][] {
     ["set-hook", "-g", "after-select-window", "set-option -w @unread 0"],
     ...bindings,
     ["bind-key", "m", "display-popup", "-E", "-w", "90%", "-h", "80%", "-d", cwd, `${cli} panel --popup`],
+    // Ctrl held after the prefix: C-b C-m (= Enter) behaves like C-b m.
+    ["bind-key", "C-m", "display-popup", "-E", "-w", "90%", "-h", "80%", "-d", cwd, `${cli} panel --popup`],
     // Add / remove agents while running (roles.yaml is re-read on open).
     ["bind-key", "n", "command-prompt", "-p", "open role:", inBackground("open %1")],
     // Same on Ctrl-b Ctrl-n — people often keep Ctrl held after the prefix.
@@ -77,6 +79,9 @@ export function chromeCommands({ cli, cwd }: ChromeInput): string[][] {
     ["bind-key", "X", "confirm-before", "-p", "close #W? (y/n)", inBackground("close #W")],
     // Jump to the agent that asked you something; answer in its own UI. Says so when nobody asked.
     ["bind-key", "a", "if-shell", "-F", "#{@ask_role}",
+      "run-shell \"tmux select-window -t ':#{@ask_role}' && tmux set-option @asks 0 && tmux set-option -u @ask_role\"",
+      "display-message -d 3000 'no agent is waiting for your answer'"],
+    ["bind-key", "C-a", "if-shell", "-F", "#{@ask_role}",
       "run-shell \"tmux select-window -t ':#{@ask_role}' && tmux set-option @asks 0 && tmux set-option -u @ask_role\"",
       "display-message -d 3000 'no agent is waiting for your answer'"],
   ];
