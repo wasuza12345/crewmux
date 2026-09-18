@@ -1,0 +1,6 @@
+version: 1
+project: my-project        # tmux session = agent-<project>
+baseBranch: main
+isolation: shared          # shared: all agents in the repo root · worktree: one git worktree per role
+delivery:
+  pasteDelayMs: 300        # pause between pasting a message and pressing Enter

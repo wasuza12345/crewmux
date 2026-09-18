@@ -1,0 +1,4 @@
+node_modules/
+dist/
+.crewmux/state/
+*.log

@@ -1,0 +1,43 @@
+import { GUIDE_FILES } from "../bridge/guide.js";
+import { sessionMarker } from "./resume.js";
+import { HARNESS_MCP_NAME, type AgentEnvelope, type ArtifactRef } from "../protocol/index.js";
+
+export const DELIVERY_PREFIX = "[harness]";
+
+/** The AI-facing configuration guide (also served by the `guide` MCP tool). */
+export const AGENT_GUIDE = GUIDE_FILES.agent;
+
+/** Prepended to every role prompt: tells the agent how it is wired, not how to do its job. */
+export function harnessPreamble(project: string, role: string, agentId: string, sessionId: string): string {
+  return [
+    `You are running inside crewmux as role "${role}" (agent "${agentId}") in project "${project}". (${sessionMarker(sessionId)})`,
+    "Other agents run at the same time, each in its own terminal, and a human may be watching yours.",
+    `You reach other agents ONLY through the \`${HARNESS_MCP_NAME}\` MCP tools:`,
+    "- list_agents: which roles are running",
+    "- send_message(to=<role>): your message is typed into that agent's session",
+    "- submit_review(to=<role>, verdict): review verdict for another role's work",
+    "- report_artifact(path): share a file; attach its id to a message",
+    "- ask_user: question for the human",
+    "- guide(topic): the crewmux manual — call it for ANY question about using/configuring crewmux, then walk the user through the steps",
+    `Input starting with "${DELIVERY_PREFIX}" is a message from another agent, not from the human.`,
+    "Answer it with send_message(to=<sender>, replyTo=<message id>) — plain text replies are only seen by the human.",
+    "The team is configured in .crewmux/ of this project (roles.yaml, agents/, prompts/).",
+    `Before changing it (roles, CLIs, models, permissions), call guide(topic) (full text: ${AGENT_GUIDE}).`,
+    "Shell commands: `crewmux status` · `crewmux open <role>` (re-reads roles.yaml) · `crewmux close <role>` · `crewmux doctor` after every config edit.",
+  ].join("\n");
+}
+
+/** How a message looks when pasted into the recipient's CLI. */
+export function formatDelivery(e: AgentEnvelope, artifacts: ReadonlyMap<string, ArtifactRef>, artifactRoot: string): string {
+  const head = [
+    `${DELIVERY_PREFIX} message ${e.id} from "${e.from}"`,
+    `type=${e.type}`,
+    ...(e.verdict ? [`verdict=${e.verdict}`] : []),
+    ...(e.replyTo ? [`reply-to=${e.replyTo}`] : []),
+  ].join(" · ");
+  const files = e.artifacts.map((id) => {
+    const a = artifacts.get(id);
+    return a ? `- ${id} (${a.kind}): ${artifactRoot}/${a.path}` : `- ${id} (unknown artifact)`;
+  });
+  return [head, e.content, ...(files.length ? ["attachments:", ...files] : []), `(reply with send_message to="${e.from}" replyTo="${e.id}")`].join("\n");
+}

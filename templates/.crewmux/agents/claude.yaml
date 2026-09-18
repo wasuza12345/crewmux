@@ -1,0 +1,4 @@
+id: claude
+kind: claude
+# model: opus
+# args: ["--permission-mode", "acceptEdits"]

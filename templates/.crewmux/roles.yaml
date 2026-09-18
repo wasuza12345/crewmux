@@ -1,0 +1,21 @@
+# A role is an address: agents send_message(to: <role>). One running session per role.
+roles:
+  planner:
+    agent: claude
+    prompt: planner.md
+  coder:
+    agent: codex
+    prompt: coder.md
+  reviewer:
+    agent: claude
+    prompt: reviewer.md
+    autostart: false        # open while running: Ctrl-b n → reviewer  (or: crewmux open reviewer)
+  clean-code:
+    # Different vendor from the coder (codex) on purpose: a reviewer should not grade its own style.
+    agent: claude
+    prompt: clean-code.md
+    autostart: false
+    rules:
+      - rules/clean-code.md
+      # A repo's own rules are read from where they live, never copied:
+      # - ../CLEAN-CODE.md

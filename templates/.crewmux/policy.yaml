@@ -1,0 +1,4 @@
+# Tool approvals stay with each vendor CLI (Claude Code / Codex ask as usual).
+# The harness only guards files it reads for agents (report_artifact).
+paths:
+  deny: ["*.env", "*.env.*", "*.pem", "*.key", "*creds-*", "id_rsa*", "id_ed25519*"]

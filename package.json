@@ -1,0 +1,62 @@
+{
+  "name": "crewmux",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Run Claude Code, Codex, Grok and other agent CLIs side by side in tmux, in their native UIs, talking through one MCP bridge",
+  "type": "module",
+  "bin": {
+    "crewmux": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "templates",
+    "docs",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "better-sqlite3": "^13.0.3",
+    "execa": "^10.0.1",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.1",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  },
+  "license": "MIT",
+  "author": "Wasu Suwannaprateep",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wasuza12345/crewmux.git"
+  },
+  "homepage": "https://github.com/wasuza12345/crewmux#readme",
+  "bugs": {
+    "url": "https://github.com/wasuza12345/crewmux/issues"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "claude-code",
+    "codex",
+    "grok",
+    "tmux",
+    "mcp",
+    "tui",
+    "multi-agent"
+  ],
+  "packageManager": "pnpm@11.0.9"
+}

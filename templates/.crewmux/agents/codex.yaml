@@ -1,0 +1,4 @@
+id: codex
+kind: codex
+# model: gpt-5-codex
+# args: ["--search"]
