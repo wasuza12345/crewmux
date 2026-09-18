@@ -76,8 +76,8 @@ Recommended:
 | Key | Action |
 |---|---|
 | `Alt-1` … `Alt-9` | go to that agent (no prefix needed) |
-| `Ctrl-b m` | popup with all messages; close with `q` or `Esc` |
-| `Ctrl-b a` | jump to the agent that asked you something, answer in its own UI |
+| `Ctrl-b m` (or `Ctrl-b Ctrl-m`) | popup with all messages; close with `q` or `Esc` |
+| `Ctrl-b a` (or `Ctrl-b Ctrl-a`) | jump to the agent that asked you something, answer in its own UI |
 | `Ctrl-b n` (or `Ctrl-b Ctrl-n`) | add an agent: an `open role:` prompt appears in the **top bar**; type the role, Enter |
 | `Ctrl-b X` (capital X) | remove this tab's agent (confirm with `y` in the top bar). Lower-case `Ctrl-b x` is tmux's own kill-pane |
 | `Ctrl-b z` | zoom the selected pane (hides the sidebar) — again to restore |
@@ -359,6 +359,7 @@ A working example used by the tests: `test/fixtures/fake-agent.mjs`.
 | `tmux ls` shows no crewmux session | it runs on its own server: `tmux -L crewmux-<project> ls` |
 | `Ctrl-b` does nothing (or VS Code's sidebar toggles) | VS Code takes the key — set `terminal.integrated.sendKeybindingsToShell`, or press `q` in the sidebar to leave |
 | `Ctrl-b m` / `Ctrl-b a` do nothing inside another tmux | press `Ctrl-b` twice |
+| `Ctrl-b m` does nothing in VS Code | VS Code takes `Ctrl+M` ("Toggle Tab Key Moves Focus"): release Ctrl after `Ctrl-b`, then press `m` |
 | `Ctrl-b a` shows "no agent is waiting for your answer" | nobody asked; the top bar shows `? N question(s)` when someone does |
 | ⚠ "started by an older crewmux" | the session predates your upgrade — `crewmux down && crewmux` once (conversations resume); key bindings are re-applied on every attach |
 | a (y/n) confirmation is not visible | it is shown in the **top** bar |

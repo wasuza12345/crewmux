@@ -1,6 +1,6 @@
 {
   "name": "crewmux",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Run Claude Code, Codex, Grok and other agent CLIs side by side in tmux, in their native UIs, talking through one MCP bridge",
   "type": "module",
   "bin": {
