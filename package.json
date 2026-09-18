@@ -1,7 +1,6 @@
 {
   "name": "crewmux",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
   "description": "Run Claude Code, Codex, Grok and other agent CLIs side by side in tmux, in their native UIs, talking through one MCP bridge",
   "type": "module",
   "bin": {
@@ -21,7 +20,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.test.json",
     "dev": "tsx src/cli.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepare": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

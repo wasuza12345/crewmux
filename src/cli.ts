@@ -52,6 +52,9 @@ function init(force: boolean): void {
   const target = join(process.cwd(), AGENT_DIR);
   if (existsSync(target) && !force) throw new Error(`${AGENT_DIR}/ already exists (use --force to overwrite template files)`);
   cpSync(TEMPLATE, target, { recursive: true, force });
+  // npm never ships files named .gitignore, so the template carries it as _gitignore.
+  const shipped = join(target, "_gitignore");
+  if (existsSync(shipped)) renameSync(shipped, join(target, ".gitignore"));
   const project = basename(process.cwd()).replace(/[^A-Za-z0-9_-]/g, "-");
   const cfgFile = join(target, "config.yaml");
   writeFileSync(cfgFile, readFileSync(cfgFile, "utf8").replace(/^project: .*$/m, `project: ${project}`));

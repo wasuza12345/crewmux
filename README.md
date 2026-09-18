@@ -7,8 +7,7 @@ crewmux is a thin wrapper, not a new agent UI: every agent keeps its vendor's ow
 permissions and conversation history. crewmux only opens them, adds a sidebar and a tab bar, and
 delivers messages between them.
 
-> ภาษาไทย: [docs/README.th.md](docs/README.th.md) · full manual (Thai): [docs/usage.md](docs/usage.md) ·
-> guide for AI agents: [docs/agent-guide.md](docs/agent-guide.md)
+> Full manual: [docs/usage.md](docs/usage.md) · guide for AI agents: [docs/agent-guide.md](docs/agent-guide.md)
 
 ```text
  crewmux-myrepo  ≡ 0:harness  ● 1:planner claude  ● 2:coder codex ✉1        ? 1 question(s) · C-b a
@@ -40,18 +39,18 @@ delivers messages between them.
 
 ## Requirements
 
-Linux or WSL, Node.js ≥ 22, tmux ≥ 3.2, pnpm, and the agent CLIs you want to use, already logged in
-(`claude`, `codex`, `grok`, …).
+Linux or WSL, Node.js ≥ 22, tmux ≥ 3.2, and the agent CLIs you want to use, already logged in
+(`claude`, `codex`, `grok`, …). pnpm is only needed to build from source.
 
 ## Install
 
 ```bash
-git clone https://github.com/wasuza12345/crewmux && cd crewmux
-pnpm install && pnpm build && npm link      # installs the `crewmux` command
+npm i -g crewmux
 crewmux help
 ```
 
-Uninstall: `npm unlink -g crewmux`.
+From source: `git clone https://github.com/wasuza12345/crewmux && cd crewmux && pnpm install && pnpm build && npm link`.
+Uninstall: `npm uninstall -g crewmux`.
 
 ## Use
 
@@ -112,7 +111,7 @@ Every field is documented in [docs/agent-guide.md](docs/agent-guide.md).
 pnpm typecheck && pnpm test     # vitest, including end-to-end tests on a private tmux server
 ```
 
-Architecture and code rules: [CLEAN-CODE.md](CLEAN-CODE.md) (Thai).
+Architecture and code rules: [CLEAN-CODE.md](CLEAN-CODE.md).
 
 ## Disclaimer
 
