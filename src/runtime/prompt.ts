@@ -21,9 +21,10 @@ export function harnessPreamble(project: string, role: string, agentId: string, 
     "- guide(topic): the crewmux manual — call it for ANY question about using/configuring crewmux, then walk the user through the steps",
     `Input starting with "${DELIVERY_PREFIX}" is a message from another agent, not from the human.`,
     "Answer it with send_message(to=<sender>, replyTo=<message id>) — plain text replies are only seen by the human.",
+    `These tools belong to the MCP server named \`${HARNESS_MCP_NAME}\` (shown as mcp__${HARNESS_MCP_NAME}__send_message, ${HARNESS_MCP_NAME}.send_message, …; if your CLI defers MCP tools, search for "${HARNESS_MCP_NAME}"). Built-in tools with similar names (e.g. a collaboration/subagent send_message) do NOT reach this team — never use them for it.`,
     "The team is configured in .crewmux/ of this project (roles.yaml, agents/, prompts/).",
     `Before changing it (roles, CLIs, models, permissions), call guide(topic) (full text: ${AGENT_GUIDE}).`,
-    "Shell commands: `crewmux status` · `crewmux open <role>` (re-reads roles.yaml) · `crewmux close <role>` · `crewmux doctor` after every config edit.",
+    "Shell commands: `crewmux status` · `crewmux open <role>` (re-reads roles.yaml) · `crewmux close <role>` · `crewmux restart <role>` (applies config changes; you may restart yourself or others — do not ask the human to run it) · `crewmux doctor` after every config edit.",
   ].join("\n");
 }
 

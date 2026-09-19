@@ -80,6 +80,7 @@ Recommended:
 | `Ctrl-b a` (or `Ctrl-b Ctrl-a`) | jump to the agent that asked you something, answer in its own UI |
 | `Ctrl-b n` (or `Ctrl-b Ctrl-n`) | add an agent: an `open role:` prompt appears in the **top bar**; type the role, Enter |
 | `Ctrl-b X` (capital X) | remove this tab's agent (confirm with `y` in the top bar). Lower-case `Ctrl-b x` is tmux's own kill-pane |
+| `Ctrl-b R` (capital R) | restart this tab's agent — picks up config changes, continues the same conversation (confirm with `y`) |
 | `Ctrl-b z` | zoom the selected pane (hides the sidebar) — again to restore |
 | `Ctrl-b d` | leave; agents keep running. Come back with `crewmux` |
 | `q` in the sidebar or the harness window | leave, like `Ctrl-b d` — works even when the terminal steals `Ctrl-b` |
@@ -155,6 +156,7 @@ latest version (an agent that was already running sees it after close + open).
 |---|---|---|
 | add an agent | `crewmux open tester` (`--fresh` = new conversation) | `Ctrl-b n`, type the role |
 | remove an agent | `crewmux close tester` | `Ctrl-b X` on its tab, then `y` |
+| restart an agent (apply config changes) | `crewmux restart tester` | `Ctrl-b R` on its tab, then `y` |
 | see what runs | `crewmux status` | the sidebar |
 | exit from inside the agent | `/exit` in Claude/Codex | the harness notices within ~2 s |
 
@@ -353,7 +355,8 @@ A working example used by the tests: `test/fixtures/fake-agent.mjs`.
 | an agent says it has no `harness` tools | run `CREWMUX_DEBUG=1 crewmux up` and look for `mcp <role> tools/list` in window 0; if missing, the CLI is still waiting on a question (row above) |
 | a message is pasted but not submitted | raise `delivery.pasteDelayMs`, e.g. to 800 |
 | `no running agent with role "x"` | that role is not open (or was closed) — check `roles.yaml` and the tabs |
-| a config change has no effect | close + open that role, or `crewmux down && crewmux` for config.yaml/policy.yaml (conversations resume) |
+| a config change has no effect | `Ctrl-b R` on that tab (or `crewmux restart <role>`); `crewmux down && crewmux` for config.yaml/policy.yaml (conversations resume) |
+| a Codex agent says it has no harness tools / messages never arrive | it used Codex's built-in `collaboration.send_message`. crewmux ≥ 0.1.2 disables those (`features.multi_agent=false`); restart that agent with `Ctrl-b R` |
 | see the message history | `Ctrl-b m`, or table `events` in `.crewmux/state/harness.db` (JSON per event) |
 | `✗ the harness did not start` | the next lines are the reason (from `.crewmux/state/harness.log`); fix it and run `crewmux` again |
 | `tmux ls` shows no crewmux session | it runs on its own server: `tmux -L crewmux-<project> ls` |

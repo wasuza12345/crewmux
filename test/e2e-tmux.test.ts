@@ -148,6 +148,15 @@ describe.skipIf(!hasTmux)("e2e: native CLIs in tmux, talking through the harness
     await expect(sendControl(join(root, ".crewmux"), { action: "open", role: "ghost" })).rejects.toThrow(/unknown role "ghost"/);
   });
 
+  it("restart: one harness-side step — new session, same role, config re-read", async () => {
+    const before = harness.sessions.byRole("planner")!;
+    await sendControl(join(root, ".crewmux"), { action: "restart", role: "planner" });
+    const after = harness.sessions.byRole("planner")!;
+    expect(after.id).not.toBe(before.id);
+    expect(harness.sessions.get(before.id)?.status).toBe("exited");
+    await waitFor("planner ready again", async () => (await tmux.capturePane(after.pane)).includes("ready role=planner"));
+  });
+
   it("the C-b n binding's command really opens a role when tmux runs it", { timeout: 30000 }, async () => {
     const bind = chromeCommands({ cli: CLI, cwd: root }).find((c) => c[0] === "bind-key" && c[1] === "n")!;
     const template = bind.at(-1)!.replace("%1", "tester");

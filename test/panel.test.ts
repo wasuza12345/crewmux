@@ -79,7 +79,7 @@ describe("tmux chrome", () => {
   });
   it("binds Alt-1..9, C-b m popup, C-b n open, C-b X close, C-b a jump-to-asker", () => {
     const binds = cmds.filter((c) => c[0] === "bind-key").map((c) => c.slice(1, 3).join(" "));
-    expect(binds).toEqual([...Array.from({ length: 9 }, (_, i) => `-n M-${i + 1}`), "m display-popup", "C-m display-popup", "n command-prompt", "C-n command-prompt", "X confirm-before", "a if-shell", "C-a if-shell"]);
+    expect(binds).toEqual([...Array.from({ length: 9 }, (_, i) => `-n M-${i + 1}`), "m display-popup", "C-m display-popup", "n command-prompt", "C-n command-prompt", "X confirm-before", "R confirm-before", "a if-shell", "C-a if-shell"]);
   });
   it("refuses a project path that would break the shell quoting", () => {
     expect(() => chromeCommands({ cli: "node x", cwd: "/it's/here" })).toThrow(/must not contain/);

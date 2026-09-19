@@ -77,6 +77,8 @@ export function chromeCommands({ cli, cwd }: ChromeInput): string[][] {
     // Same on Ctrl-b Ctrl-n — people often keep Ctrl held after the prefix.
     ["bind-key", "C-n", "command-prompt", "-p", "open role:", inBackground("open %1")],
     ["bind-key", "X", "confirm-before", "-p", "close #W? (y/n)", inBackground("close #W")],
+    // Restart this tab's agent (picks up config changes, same conversation) without leaving tmux.
+    ["bind-key", "R", "confirm-before", "-p", "restart #W? (y/n)", inBackground("restart #W")],
     // Jump to the agent that asked you something; answer in its own UI. Says so when nobody asked.
     ["bind-key", "a", "if-shell", "-F", "#{@ask_role}",
       "run-shell \"tmux select-window -t ':#{@ask_role}' && tmux set-option @asks 0 && tmux set-option -u @ask_role\"",

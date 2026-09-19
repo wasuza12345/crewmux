@@ -8,6 +8,7 @@ Read it before editing anything in `.crewmux/`. The human-facing manual is `docs
 
 - Each **role** (planner, coder, …) is one native CLI in its own tmux window. The harness never
   renders or parses your screen.
+- Some CLIs have built-in tools with the same names (Codex's `collaboration.send_message` / `list_agents`). They do NOT reach this team — use the tools of the MCP server named `harness` only. (crewmux disables Codex's built-in multi-agent tools for you.)
 - Agents talk **only** through the `harness` MCP server: `list_agents`, `send_message`,
   `submit_review`, `report_artifact`, `ask_user`, and `guide` (this manual, searchable by topic).
   A message you send is pasted into the recipient's terminal, prefixed with `[harness] message <id> from "<role>"`.
@@ -80,7 +81,8 @@ paths: { deny: ["*.env", "*.pem", ...] }   # only guards report_artifact, not yo
 | See roles and whether they run | `crewmux status` |
 | Start a role now (re-reads roles.yaml) | `crewmux open <role>` (`--fresh` = new conversation) |
 | Stop a role (resumable later) | `crewmux close <role>` |
-| Apply changed flags/model/prompt to a running role | `crewmux close <role> && crewmux open <role>` |
+| Restart a role — yourself included (applies config, same conversation) | `crewmux restart <role>` — do it yourself, do not ask the human |
+| Apply changed flags/model/prompt to a running role | `crewmux restart <role>` (never `close && open` on your own role: `close` kills your shell first) |
 | Apply config.yaml / policy.yaml changes | ask the human to run `crewmux down && crewmux` |
 
 Never use `crewmux up <role>` to add a role to a running session — it only attaches. Use `open`.

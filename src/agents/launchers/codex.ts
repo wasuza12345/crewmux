@@ -23,6 +23,9 @@ export const codexLauncher: AgentLauncher = {
         // harness tools only talk to the harness — no per-call prompt (shell/file approvals are untouched)
         "-c", `mcp_servers.${HARNESS_MCP_NAME}.default_tools_approval_mode="approve"`,
         "-c", `developer_instructions=${toml(ctx.systemPrompt)}`,
+        // Codex ≥0.155 ships built-in collaboration.send_message / list_agents; the model picked those
+        // instead of ours and messages never arrived. The harness is the multi-agent layer here.
+        "-c", "features.multi_agent=false",
         ...(model ? ["-m", model] : []),
         ...def.args,
         ...(ctx.resumeId ? [ctx.resumeId] : []),

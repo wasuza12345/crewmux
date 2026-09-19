@@ -10,7 +10,11 @@ import type { Harness } from "./harness.js";
 
 export const controlSocketPath = (agentDir: string) => join(agentDir, "state", "control.sock");
 
-type Request = { action: "open"; role: string; fresh?: boolean } | { action: "close"; role: string } | { action: "status" };
+type Request =
+  | { action: "open"; role: string; fresh?: boolean }
+  | { action: "close"; role: string }
+  | { action: "restart"; role: string; fresh?: boolean }
+  | { action: "status" };
 
 export async function startControlServer(harness: Harness, agentDir: string): Promise<Server> {
   const path = controlSocketPath(agentDir);
@@ -25,6 +29,7 @@ export async function startControlServer(harness: Harness, agentDir: string): Pr
           let result: unknown;
           if (r.action === "open") result = await harness.launch(r.role, { fresh: Boolean(r.fresh), reload: true });
           else if (r.action === "close") result = await harness.close(r.role);
+          else if (r.action === "restart") result = await harness.restart(r.role, { fresh: Boolean(r.fresh) });
           else if (r.action === "status") result = harness.status();
           else throw new Error("unknown action");
           res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, result: result ?? null }));

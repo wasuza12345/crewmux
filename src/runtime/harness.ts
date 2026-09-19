@@ -133,6 +133,16 @@ export class Harness {
     this.markExited(s.id);
   }
 
+  /**
+   * Close + reopen in one step, done by the harness itself — so an agent can restart itself (its own
+   * shell dies with its window, which would cut a client-side "close && open" in half). Picks up
+   * changed config and continues the same conversation unless `fresh`.
+   */
+  async restart(role: string, { fresh = false }: { fresh?: boolean } = {}): Promise<AgentSessionInfo> {
+    if (this.sessions.byRole(role)) await this.close(role);
+    return this.launch(role, { fresh, reload: true });
+  }
+
   /** Every role in roles.yaml (as it is on disk now) with its current status, for `crewmux status`. */
   status(): { role: string; agent: string; status: string; window?: string }[] {
     let roles = this.config.roles;

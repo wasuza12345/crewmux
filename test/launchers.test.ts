@@ -28,6 +28,7 @@ describe("launchers build the vendor's own CLI command", () => {
     expect(spec.args).toContain('mcp_servers.harness.url="http://127.0.0.1:4000/mcp"');
     expect(spec.args).toContain('mcp_servers.harness.bearer_token_env_var="HARNESS_MCP_TOKEN"');
     expect(spec.args).toContain('mcp_servers.harness.default_tools_approval_mode="approve"');
+    expect(spec.args).toContain("features.multi_agent=false");
     expect(spec.args).toContain('developer_instructions="be \\"careful\\"\\nline2"');
     expect(argAfter(spec.args, "-m")).toBe("b");
     expect(spec.args.join(" ")).not.toContain(TOKEN);

@@ -21,6 +21,7 @@ const USAGE = `crewmux — run Claude Code, Codex and other agent CLIs side by s
   crewmux down                        stop everything for this project
   crewmux open <role> [--fresh]       add a role while running (re-reads roles.yaml)   · tmux: Ctrl-b n
   crewmux close <role>                remove a role while running (resumable later)     · tmux: Ctrl-b X
+  crewmux restart <role> [--fresh]    reopen a role with its latest config             · tmux: Ctrl-b R
   crewmux status                      roles and whether they are running
   crewmux doctor                      check config, tmux and agent binaries
   crewmux init [--force]              only create .crewmux/ in the current directory
@@ -248,6 +249,13 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     case "serve": return serve(args);
+    case "restart": {
+      const role = args[0];
+      if (!role) throw new Error(`usage: crewmux restart <role>`);
+      await sendControl(loadConfig().dir, { action: "restart", role, fresh: flags.has("--fresh") });
+      console.log(`restarted ${role}`);
+      return;
+    }
     case "open":
     case "close": {
       const role = args[0];
