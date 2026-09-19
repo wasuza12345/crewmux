@@ -18,10 +18,15 @@ const codexHome = () => process.env.CODEX_HOME ?? join(homedir(), ".codex");
 /** Marker put in every system prompt so a Codex rollout can be matched back to its harness session. */
 export const sessionMarker = (harnessSessionId: string) => `harness-session: ${harnessSessionId}`;
 
-export function claudeTranscriptExists(uuid: string): boolean {
+export function claudeTranscriptPath(uuid: string): string | undefined {
   const projects = join(claudeHome(), "projects");
-  if (!existsSync(projects)) return false;
-  return readdirSync(projects).some((dir) => existsSync(join(projects, dir, `${uuid}.jsonl`)));
+  if (!existsSync(projects)) return undefined;
+  const dir = readdirSync(projects).find((d) => existsSync(join(projects, d, `${uuid}.jsonl`)));
+  return dir ? join(projects, dir, `${uuid}.jsonl`) : undefined;
+}
+
+export function claudeTranscriptExists(uuid: string): boolean {
+  return claudeTranscriptPath(uuid) !== undefined;
 }
 
 /** Rollout files, newest first, from the last `days` day-folders. */
@@ -44,8 +49,12 @@ const rolloutId = (file: string): string | undefined => {
   return meta.payload?.id;
 };
 
+export function codexRolloutPath(id: string): string | undefined {
+  return codexRollouts().find((f) => f.endsWith(`-${id}.jsonl`));
+}
+
 export function codexRolloutExists(id: string): boolean {
-  return codexRollouts().some((f) => f.endsWith(`-${id}.jsonl`));
+  return codexRolloutPath(id) !== undefined;
 }
 
 /** The Codex conversation a harness session started (matched by cwd + the marker in its instructions). */

@@ -89,7 +89,7 @@ export class HarnessMcpServer {
     for (const name of Object.keys(TOOL_INPUTS) as (keyof typeof TOOL_INPUTS)[]) {
       server.registerTool(name, { description: TOOL_DESCRIPTIONS[name], inputSchema: TOOL_INPUTS[name] }, async (input: unknown) => {
         try {
-          const result = (handlers[name] as (i: unknown) => object)(input);
+          const result = await (handlers[name] as (i: unknown) => object | Promise<object>)(input);
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], structuredContent: result as Record<string, unknown> };
         } catch (err) {
           const message = err instanceof ToolError ? err.message : `internal error: ${err instanceof Error ? err.message : String(err)}`;

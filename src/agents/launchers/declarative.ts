@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import type { AgentDefinition } from "../../config/schema.js";
 import { HARNESS_ENV, harnessEnv, type AgentLauncher, type LaunchContext } from "../launcher.js";
-import { effectiveCli, fill } from "../presets.js";
+import { autoCompactArgs, effectiveCli, fill } from "../presets.js";
 
 const vars = (ctx: LaunchContext, id: string | undefined) => ({ id, url: ctx.mcpUrl, role: ctx.role });
 
@@ -24,6 +24,7 @@ export const declarativeLauncher = (kind: AgentDefinition["kind"]): AgentLaunche
         ...f(cli?.allow),
         ...f(cli?.mcp.args),
         ...(model && cli?.modelFlag ? [cli.modelFlag, model] : []),
+        ...autoCompactArgs(def, ctx.compactAt, home),
         ...def.args,
       ],
       env: { ...harnessEnv(ctx), [HARNESS_ENV.prompt]: ctx.systemPrompt },

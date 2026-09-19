@@ -21,6 +21,7 @@ const USAGE = `crewmux — run Claude Code, Codex and other agent CLIs side by s
   crewmux down                        stop everything for this project
   crewmux open <role> [--fresh]       add a role while running (re-reads roles.yaml)   · tmux: Ctrl-b n
   crewmux close <role>                remove a role while running (resumable later)     · tmux: Ctrl-b X
+  crewmux compact <role>|--all [--focus "…"]  compact conversations to save tokens  · tmux: Ctrl-b C
   crewmux restart <role> [--fresh]    reopen a role with its latest config             · tmux: Ctrl-b R
   crewmux status                      roles and whether they are running
   crewmux doctor                      check config, tmux and agent binaries
@@ -249,6 +250,28 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     case "serve": return serve(args);
+    case "compact": {
+      // `compact <role> | --all [--focus "what to keep"]`
+      const raw = argv.slice(1);
+      const fi = raw.indexOf("--focus");
+      const focus = fi >= 0 ? (raw[fi + 1] ?? "") : "";
+      const positional = raw.filter((a, i) => !a.startsWith("--") && (fi < 0 || i !== fi + 1));
+      const dir = loadConfig().dir;
+      const roles = raw.includes("--all")
+        ? ((await sendControl(dir, { action: "status" })) as { role: string; status: string }[]).filter((r) => r.status === "running").map((r) => r.role)
+        : positional.slice(0, 1);
+      if (!roles.length) throw new Error("usage: crewmux compact <role> | --all [--focus \"what to keep\"]");
+      for (const role of roles) {
+        try {
+          await sendControl(dir, { action: "compact", role, focus });
+          console.log(`compact queued for ${role} (runs after its current turn)`);
+        } catch (err) {
+          console.log(`✗ ${role}: ${err instanceof Error ? err.message : String(err)}`);
+          process.exitCode = 1;
+        }
+      }
+      return;
+    }
     case "restart": {
       const role = args[0];
       if (!role) throw new Error(`usage: crewmux restart <role>`);

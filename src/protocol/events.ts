@@ -12,6 +12,10 @@ export const HarnessEvent = z.discriminatedUnion("type", [
   z.object({ ...base, type: z.literal("message"), envelope: AgentEnvelope }),
   z.object({ ...base, type: z.literal("message.delivery"), messageId: z.string(), to: z.string(), ok: z.boolean(), detail: z.string().optional() }),
   z.object({ ...base, type: z.literal("artifact.created"), artifact: ArtifactRef }),
+  /** Context size of a running agent, read from its CLI's own session files. */
+  z.object({ ...base, type: z.literal("session.usage"), role: z.string(), tokens: z.number(), window: z.number().optional() }),
+  /** A compaction was typed into an agent's CLI. `by` = requesting role, or "user". */
+  z.object({ ...base, type: z.literal("session.compact"), role: z.string(), by: z.string(), focus: z.string().optional() }),
 ]);
 export type HarnessEvent = z.infer<typeof HarnessEvent>;
 export type HarnessEventType = HarnessEvent["type"];

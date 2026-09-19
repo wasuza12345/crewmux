@@ -14,6 +14,7 @@ type Request =
   | { action: "open"; role: string; fresh?: boolean }
   | { action: "close"; role: string }
   | { action: "restart"; role: string; fresh?: boolean }
+  | { action: "compact"; role: string; focus?: string }
   | { action: "status" };
 
 export async function startControlServer(harness: Harness, agentDir: string): Promise<Server> {
@@ -29,6 +30,7 @@ export async function startControlServer(harness: Harness, agentDir: string): Pr
           let result: unknown;
           if (r.action === "open") result = await harness.launch(r.role, { fresh: Boolean(r.fresh), reload: true });
           else if (r.action === "close") result = await harness.close(r.role);
+          else if (r.action === "compact") result = await harness.compact(r.role, { focus: r.focus ?? "" });
           else if (r.action === "restart") result = await harness.restart(r.role, { fresh: Boolean(r.fresh) });
           else if (r.action === "status") result = harness.status();
           else throw new Error("unknown action");

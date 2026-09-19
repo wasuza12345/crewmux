@@ -33,7 +33,7 @@ describe("sidebar panel", () => {
     expect(lines).toHaveLength(24);
     for (const l of lines) expect(visibleWidth(l)).toBeLessThanOrEqual(32);
     const text = lines.join("\n");
-    expect(text).toContain("● planner  claude ◀ here");
+    expect(text).toContain("● planner  claude  ◀");
     expect(text).toContain("○ reviewer claude not started");
     expect(text).toContain("ASKING YOU (1)");
     expect(text).toContain("merge ได้เลยไหม?");
@@ -67,6 +67,19 @@ describe("sidebar panel", () => {
     expect(s.roles.map((r) => `${r.role}:${r.status}`)).toEqual(["planner:not started", "tester:running"]);
   });
 
+  it("shows context size per agent (% with a window, else k tokens) and a ⟳ after compaction", () => {
+    let s = [session("planner", "running"), session("coder", "running")].reduce(reduce, initialState([
+      { role: "planner", vendor: "claude", color: "#e3a857" },
+      { role: "coder", vendor: "codex", color: "#5cb4cc" },
+    ]));
+    s = reduce(s, ev({ type: "session.usage", role: "coder", tokens: 190000, window: 258400 }));
+    s = reduce(s, ev({ type: "session.usage", role: "planner", tokens: 312150 }));
+    s = reduce(s, ev({ type: "session.compact", role: "planner", by: "user" }));
+    const text = renderPanel(s, { width: 32, height: 20, mode: "side", ansi: false }).join("\n");
+    expect(text).toMatch(/coder\s+codex\s+74%/);
+    expect(text).toMatch(/planner\s+claude\s+312k⟳/);
+  });
+
   it("Thai combining marks do not count as columns", () => {
     expect(visibleWidth("ได้")).toBe(2);
   });
@@ -79,7 +92,7 @@ describe("tmux chrome", () => {
   });
   it("binds Alt-1..9, C-b m popup, C-b n open, C-b X close, C-b a jump-to-asker", () => {
     const binds = cmds.filter((c) => c[0] === "bind-key").map((c) => c.slice(1, 3).join(" "));
-    expect(binds).toEqual([...Array.from({ length: 9 }, (_, i) => `-n M-${i + 1}`), "m display-popup", "C-m display-popup", "n command-prompt", "C-n command-prompt", "X confirm-before", "R confirm-before", "a if-shell", "C-a if-shell"]);
+    expect(binds).toEqual([...Array.from({ length: 9 }, (_, i) => `-n M-${i + 1}`), "m display-popup", "C-m display-popup", "n command-prompt", "C-n command-prompt", "X confirm-before", "R confirm-before", "C confirm-before", "a if-shell", "C-a if-shell"]);
   });
   it("refuses a project path that would break the shell quoting", () => {
     expect(() => chromeCommands({ cli: "node x", cwd: "/it's/here" })).toThrow(/must not contain/);

@@ -15,11 +15,15 @@ import { newId, USER, type AgentEnvelope, type AgentSessionInfo, type ArtifactRe
 import { formatDelivery, harnessPreamble } from "./prompt.js";
 import { findCodexSession, resolveResume } from "./resume.js";
 import { prepareVendor } from "./vendor-setup.js";
+import { contextUsage, type ContextUsage } from "./usage.js";
+import { compactCommand } from "../agents/presets.js";
+import { ToolError } from "../bridge/tools.js";
 
 export interface HarnessOptions {
   tmuxSession: string; // must already exist — `crewmux up` creates it with the harness in window 0
   log?: (line: string) => void;
   watchIntervalMs?: number;
+  usageIntervalMs?: number; // how often context usage is re-read from the CLIs' session files (default 20 s)
   debug?: boolean; // log every MCP call (method + tool name) in the harness window
   /** Command for the sidebar pane in each agent window (`agent panel`); omitted = no sidebar. */
   panelArgv?: string[];
@@ -41,10 +45,20 @@ export class Harness {
   private db?: Db;
   private store?: EventStore;
   private watcher?: NodeJS.Timeout;
+  private usageTimer?: NodeJS.Timeout;
+  private readonly usage = new Map<string, ContextUsage>(); // role → latest known context size
+  private readonly lastCompact = new Map<string, number>(); // role → ms of the last compaction
 
   constructor(private config: LoadedConfig, private readonly opts: HarnessOptions) {
     const onCall = opts.debug ? (c: { role: string }, method: string, detail: string) => opts.log?.(`  mcp ${c.role} ${method} ${detail}`.trimEnd()) : undefined;
-    this.mcp = new HarnessMcpServer({ bus: this.bus, sessions: this.sessions, policy: new PathPolicy(config.policy), agentDir: config.dir }, onCall);
+    this.mcp = new HarnessMcpServer({
+      bus: this.bus,
+      sessions: this.sessions,
+      policy: new PathPolicy(config.policy),
+      agentDir: config.dir,
+      usage: (role) => this.usageOf(role),
+      compact: (by, target, focus) => this.compact(target, { by, focus }),
+    }, onCall);
   }
 
   async start(): Promise<void> {
@@ -55,6 +69,7 @@ export class Harness {
     await this.mcp.start();
     this.bus.publish({ type: "run.status", runId: this.runId, status: "started", project: this.config.project.project });
     this.watcher = setInterval(() => void this.reapExited(), this.opts.watchIntervalMs ?? 2000);
+    this.usageTimer = setInterval(() => this.pollUsage(), this.opts.usageIntervalMs ?? 20_000);
   }
 
   /**
@@ -86,6 +101,7 @@ export class Harness {
     const spec = launcher.build(def, {
       sessionId, role, systemPrompt, token, mcpUrl: this.mcp.url,
       ...(binding.model ? { model: binding.model } : {}),
+      ...(binding.compactAt ? { compactAt: binding.compactAt } : {}),
       ...(providerSessionId ? { providerSessionId } : {}),
       ...(resumeId ? { resumeId } : {}),
     });
@@ -159,6 +175,7 @@ export class Harness {
 
   async stop(): Promise<void> {
     if (this.watcher) clearInterval(this.watcher);
+    if (this.usageTimer) clearInterval(this.usageTimer);
     for (const s of this.sessions.list()) {
       if (s.status === "exited") continue;
       await tmux.killWindow(s.window);
@@ -187,11 +204,65 @@ export class Harness {
     if (!target) return report(false, "recipient not running");
 
     const text = formatDelivery(envelope, this.artifacts, join(this.config.dir, "state", "artifacts"));
-    const prev = this.deliveryQueues.get(target.pane) ?? Promise.resolve();
-    const next = prev
-      .then(() => tmux.pasteAndSubmit(target.pane, text, this.config.project.delivery.pasteDelayMs))
-      .then(() => report(true), (err: unknown) => report(false, err instanceof Error ? err.message : String(err)));
-    this.deliveryQueues.set(target.pane, next);
+    this.typeInto(target.pane, text).then(() => report(true), (err: unknown) => report(false, err instanceof Error ? err.message : String(err)));
+  }
+
+  /** Paste text into a pane and submit, one at a time per pane so pastes never interleave. */
+  private typeInto(pane: string, text: string): Promise<void> {
+    const prev = this.deliveryQueues.get(pane) ?? Promise.resolve();
+    const next = prev.catch(() => undefined).then(() => tmux.pasteAndSubmit(pane, text, this.config.project.delivery.pasteDelayMs));
+    this.deliveryQueues.set(pane, next.catch(() => undefined));
+    return next;
+  }
+
+  /**
+   * Type the CLI's own compact command into a role's session (it runs after the current turn).
+   * `by` is the requesting role or "user"; AI requests obey config.compact (ai on/off, min interval).
+   */
+  async compact(role: string, { by = USER, focus = "" }: { by?: string; focus?: string } = {}): Promise<void> {
+    const s = this.sessions.byRole(role);
+    if (!s) throw new ToolError(`no running agent with role "${role}"`);
+    const def = this.config.agents.get(s.agentId)!;
+    const text = compactCommand(def, focus);
+    if (!text) throw new ToolError(`${role} (${def.kind}) has no compact command — add cli.compact to agents/${def.id}.yaml`);
+    const now = Date.now();
+    if (by !== USER) {
+      const { ai, minIntervalMinutes } = this.config.project.compact;
+      if (!ai) throw new ToolError("the human turned off AI compaction (config.yaml → compact.ai: false)");
+      const last = this.lastCompact.get(role);
+      if (last !== undefined && now - last < minIntervalMinutes * 60_000) {
+        const wait = Math.ceil((minIntervalMinutes * 60_000 - (now - last)) / 60_000);
+        throw new ToolError(`${role} was compacted recently — try again in ${wait} min`);
+      }
+    }
+    this.lastCompact.set(role, now);
+    this.bus.publish({ type: "session.compact", runId: this.runId, role, by, ...(focus ? { focus } : {}) });
+    await this.typeInto(s.pane, text);
+  }
+
+  /** Re-read context sizes; publish only real changes (≥ 1% of the window, or ≥ 5k tokens when the window is unknown). */
+  private pollUsage(): void {
+    for (const s of this.sessions.list()) {
+      if (s.status === "exited") continue;
+      const def = this.config.agents.get(s.agentId);
+      if (!def) continue;
+      if (def.kind === "codex" && !s.providerSessionId) {
+        const found = findCodexSession(s.id, s.cwd);
+        if (found) this.sessions.setProviderSession(s.id, found);
+      }
+      const u = contextUsage(def, this.sessions.get(s.id)!);
+      if (!u) continue;
+      const prev = this.usage.get(s.role);
+      const step = u.window ? u.window / 100 : 5000;
+      if (prev && Math.abs(prev.tokens - u.tokens) < step && prev.window === u.window) continue;
+      this.usage.set(s.role, u);
+      this.bus.publish({ type: "session.usage", runId: this.runId, role: s.role, tokens: u.tokens, ...(u.window ? { window: u.window } : {}) });
+    }
+  }
+
+  /** Latest known context size of a role (for list_agents). */
+  usageOf(role: string): ContextUsage | undefined {
+    return this.usage.get(role);
   }
 
   /** Cosmetic tmux updates must never break delivery — report and move on. */
@@ -255,5 +326,7 @@ export function describe(e: HarnessEvent): string {
     }
     case "message.delivery": return `${t}    ${e.ok ? "✓ delivered" : "✗ not delivered"} to ${e.to}${e.detail ? ` (${e.detail})` : ""}`;
     case "artifact.created": return `${t}  ${e.artifact.role} shared ${e.artifact.kind} ${e.artifact.id}`;
+    case "session.usage": return `${t}  ${e.role} context ${Math.round(e.tokens / 1000)}k${e.window ? ` (${Math.round((e.tokens / e.window) * 100)}%)` : ""}`;
+    case "session.compact": return `${t}  ${e.role} compact ← ${e.by}${e.focus ? ` · keep: ${e.focus.slice(0, 60)}` : ""}`;
   }
 }

@@ -79,6 +79,8 @@ export function chromeCommands({ cli, cwd }: ChromeInput): string[][] {
     ["bind-key", "X", "confirm-before", "-p", "close #W? (y/n)", inBackground("close #W")],
     // Restart this tab's agent (picks up config changes, same conversation) without leaving tmux.
     ["bind-key", "R", "confirm-before", "-p", "restart #W? (y/n)", inBackground("restart #W")],
+    // Compact this tab's agent (the CLI's own /compact) — saves tokens on the following turns.
+    ["bind-key", "C", "confirm-before", "-p", "compact #W? (y/n)", inBackground("compact #W")],
     // Jump to the agent that asked you something; answer in its own UI. Says so when nobody asked.
     ["bind-key", "a", "if-shell", "-F", "#{@ask_role}",
       "run-shell \"tmux select-window -t ':#{@ask_role}' && tmux set-option @asks 0 && tmux set-option -u @ask_role\"",

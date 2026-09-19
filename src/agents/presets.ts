@@ -7,6 +7,17 @@ import { HARNESS_ENV } from "./launcher.js";
  * adding a CLI never needs code. Flags checked against the installed CLI's --help.
  */
 export const PRESETS: Partial<Record<AgentDefinition["kind"], { command: string; cli: CliSpec }>> = {
+  // Claude Code and Codex have code launchers (their MCP/prompt flags need JSON/TOML);
+  // their presets only describe compaction, which is plain data.
+  claude: {
+    command: "claude",
+    cli: { mcp: { args: [] }, allow: [], compact: { command: "/compact {focus}", auto: ["--autocompact", "{tokens}"] } },
+  },
+  codex: {
+    command: "codex",
+    // Codex's /compact takes no instructions; {focus} is dropped.
+    cli: { mcp: { args: [] }, allow: [], compact: { command: "/compact", auto: ["-c", "model_auto_compact_token_limit={tokens}"] } },
+  },
   // Grok CLI 1.0.3 (xAI)
   grok: {
     command: "grok",
@@ -32,6 +43,14 @@ export const PRESETS: Partial<Record<AgentDefinition["kind"], { command: string;
         },
       },
       allow: ["--allow", `MCPTool(*${HARNESS_MCP_NAME}*)`],
+      // Auto-compaction is a config-file percentage in Grok, not a flag — no `auto` here.
+      compact: { command: "/compact {focus}" },
+      usage: {
+        file: "~/.grok/sessions/{cwd_urlencoded}/{id}/updates.jsonl",
+        pattern: String.raw`"usage":\{"inputTokens":(\d+)`,
+        windowFile: "~/.grok/sessions/{cwd_urlencoded}/{id}/resources_state.json",
+        windowPattern: String.raw`"context_window_tokens":\s*(\d+)`,
+      },
     },
   },
 };
@@ -41,6 +60,20 @@ export function effectiveCli(def: AgentDefinition): { command: string | undefine
   const preset = PRESETS[def.kind];
   if (!preset) return { command: def.command, cli: def.cli };
   return { command: def.command ?? preset.command, cli: def.cli ? { ...preset.cli, ...def.cli } : preset.cli };
+}
+
+/** Launch args that make the CLI auto-compact at `tokens`, or [] if it has no such switch. */
+export function autoCompactArgs(def: AgentDefinition, tokens: number | undefined, home: string): string[] {
+  const auto = effectiveCli(def).cli?.compact?.auto;
+  if (!tokens || !auto) return [];
+  return auto.map((a) => fill(a, { tokens: String(tokens) }, home));
+}
+
+/** The text typed into the CLI to compact now, or undefined if the CLI cannot. */
+export function compactCommand(def: AgentDefinition, focus: string): string | undefined {
+  const cmd = effectiveCli(def).cli?.compact?.command;
+  if (!cmd) return undefined;
+  return cmd.replace("{focus}", focus.replaceAll("\n", " ")).trimEnd();
 }
 
 /** Fill {placeholders}; "~/" → home. Pure given `home`. */

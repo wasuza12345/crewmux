@@ -9,6 +9,9 @@ export interface PanelRole {
   vendor: string;
   color: string; // #rrggbb
   status: RoleStatus;
+  tokens?: number;
+  window?: number;
+  compactedAt?: number;
 }
 
 export interface FeedItem {
@@ -48,6 +51,10 @@ export function reduce(state: PanelState, e: HarnessEvent): PanelState {
       const item: FeedItem = { id: m.id, ts: e.ts, from: m.from, to: m.to, type: m.type, content: m.content, ...(m.verdict ? { verdict: m.verdict } : {}) };
       return { ...state, feed: [...state.feed, item] };
     }
+    case "session.usage":
+      return { ...state, roles: state.roles.map((r) => (r.role === e.role ? { ...r, tokens: e.tokens, ...(e.window ? { window: e.window } : {}) } : r)) };
+    case "session.compact":
+      return { ...state, roles: state.roles.map((r) => (r.role === e.role ? { ...r, compactedAt: e.ts } : r)) };
     case "message.delivery":
       return { ...state, feed: state.feed.map((f) => (f.id === e.messageId ? { ...f, delivered: e.ok } : f)) };
     default:
@@ -119,6 +126,14 @@ function renderLine(line: Line, width: number, ansi: boolean): string {
 }
 
 const hhmm = (ts: number) => new Date(ts).toTimeString().slice(0, 5);
+
+/** "45%" (warn ≥ 70%) when the window is known, else "312k"; "⟳" after a compaction. */
+function contextSeg(r: PanelRole): Seg[] {
+  if (r.tokens === undefined) return r.compactedAt ? [{ text: "⟳", dim: true }] : [];
+  const pct = r.window ? Math.round((r.tokens / r.window) * 100) : undefined;
+  const label = pct !== undefined ? `${pct}%` : `${Math.round(r.tokens / 1000)}k`;
+  return [{ text: label + (r.compactedAt ? "⟳" : ""), ...(pct !== undefined && pct >= 70 ? { color: WARN } : { dim: true }) }];
+}
 const dot = (s: RoleStatus) => (s === "running" ? "●" : "○");
 const shortType: Record<MessageType, string> = { request: "req", question: "ask", answer: "ans", info: "info", review_request: "review?", review_result: "review" };
 
@@ -143,7 +158,8 @@ export function renderPanel(state: PanelState, opts: RenderOptions): string[] {
       { text: `${dot(r.status)} `, color: r.status === "running" ? OK : "#66716b" },
       { text: r.role.padEnd(roleCol), color: r.color },
       { text: r.vendor.padEnd(7), dim: true },
-      ...(r.role === opts.viewer ? [{ text: "◀ here", dim: true }] : r.status !== "running" ? [{ text: r.status, dim: true }] : []),
+      ...(r.status !== "running" ? [{ text: r.status, dim: true }] : contextSeg(r)),
+      ...(r.role === opts.viewer ? [{ text: " ◀", dim: true }] : []),
     ]);
   }
 

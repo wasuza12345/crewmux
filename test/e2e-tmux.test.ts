@@ -39,14 +39,20 @@ describe.skipIf(!hasTmux)("e2e: native CLIs in tmux, talking through the harness
     root = mkdtempSync(join(tmpdir(), "harness-e2e-"));
     cpSync(resolve(import.meta.dirname, "../templates/.crewmux/prompts"), join(root, ".crewmux/prompts"), { recursive: true });
     mkdirSync(join(root, ".crewmux/agents"), { recursive: true });
-    writeFileSync(join(root, ".crewmux/config.yaml"), "version: 1\nproject: e2e\ndelivery: { pasteDelayMs: 50 }\n");
+    writeFileSync(join(root, ".crewmux/config.yaml"), "version: 1\nproject: e2e\ndelivery: { pasteDelayMs: 50 }\ncompact: { minIntervalMinutes: 10 }\n");
     writeFileSync(join(root, ".crewmux/policy.yaml"), "paths: { deny: ['*.env'] }\n");
-    writeFileSync(join(root, ".crewmux/agents/fake.yaml"), `id: fake\nkind: custom\ncommand: ${process.execPath}\nargs: [${JSON.stringify(FAKE)}]\n`);
+    // The fake agent declares compaction and a usage file in YAML, like any custom CLI would.
+    writeFileSync(join(root, ".crewmux/agents/fake.yaml"), [
+      "id: fake", "kind: custom", `command: ${FAKE}`, // executable (shebang), so CLI flags follow it like a real CLI's
+      "cli:", "  session: { new: ['--sid', '{id}'], resume: ['--sid', '{id}'] }",
+      "  compact: { command: '/compact {focus}' }",
+      `  usage: { file: '${root}/usage-{id}.txt', pattern: 'tokens=(\\d+)', window: 100000 }`, "",
+    ].join("\n"));
     writeFileSync(join(root, ".crewmux/roles.yaml"), "roles:\n  planner: { agent: fake, prompt: planner.md }\n  coder: { agent: fake, prompt: coder.md }\n");
     await tmux.newSession(SESSION, "harness", root, ["sleep", "600"]);
     await tmux.runAll(chromeCommands({ cli: CLI, cwd: root })); // must be accepted by real tmux
     // Sidebar stand-in: a pane that would swallow input if messages were sent to the window instead of the agent pane.
-    harness = new Harness(loadConfig(root), { tmuxSession: SESSION, watchIntervalMs: 200, panelArgv: ["cat"] });
+    harness = new Harness(loadConfig(root), { tmuxSession: SESSION, watchIntervalMs: 200, usageIntervalMs: 200, panelArgv: ["cat"] });
     harness.bus.subscribe((e) => events.push(e));
     await harness.start();
     control = await startControlServer(harness, join(root, ".crewmux"));
@@ -155,6 +161,23 @@ describe.skipIf(!hasTmux)("e2e: native CLIs in tmux, talking through the harness
     expect(after.id).not.toBe(before.id);
     expect(harness.sessions.get(before.id)?.status).toBe("exited");
     await waitFor("planner ready again", async () => (await tmux.capturePane(after.pane)).includes("ready role=planner"));
+  });
+
+  it("compact: the CLI's own command is typed into the pane; AI requests are rate-limited, the user's are not", async () => {
+    const planner = harness.sessions.byRole("planner")!;
+    await harness.compact("planner", { by: "coder", focus: "keep the API decision" });
+    await waitFor("compact typed", async () => (await tmux.capturePane(planner.pane)).includes("got: /compact keep the API decision"));
+    await expect(harness.compact("planner", { by: "coder" })).rejects.toThrow(/compacted recently/);
+    await harness.compact("planner", { focus: "user override" }); // the human is never rate-limited
+    await waitFor("second compact typed", async () => (await tmux.capturePane(planner.pane)).includes("got: /compact user override"));
+    expect(events.filter((e) => e.type === "session.compact").map((e) => e.type === "session.compact" && e.by)).toEqual(["coder", "user"]);
+  });
+
+  it("usage: read from the file the CLI spec points at, published as events", async () => {
+    const planner = harness.sessions.byRole("planner")!;
+    writeFileSync(join(root, `usage-${planner.providerSessionId}.txt`), "tokens=1000\ntokens=72000\n");
+    await waitFor("usage event", () => events.some((e) => e.type === "session.usage" && e.role === "planner" && e.tokens === 72000 && e.window === 100000));
+    expect(harness.usageOf("planner")).toEqual({ tokens: 72000, window: 100000 });
   });
 
   it("the C-b n binding's command really opens a role when tmux runs it", { timeout: 30000 }, async () => {

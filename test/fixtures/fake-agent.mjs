@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // Stand-in for a vendor CLI inside a tmux window. Reads lines typed/pasted into it:
 //   /send <role> <text>   → calls the harness MCP send_message tool
 //   /ask <text>           → calls ask_user

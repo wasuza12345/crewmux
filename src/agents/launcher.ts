@@ -18,6 +18,7 @@ export interface LaunchContext {
   token: string;
   providerSessionId?: string; // pre-assigned vendor session id when the vendor supports it
   resumeId?: string; // continue this vendor conversation instead of starting a new one
+  compactAt?: number; // tokens — ask the CLI to auto-compact at this size (roles.yaml → compactAt)
 }
 
 /** Exactly what goes into `tmux new-window`: the vendor's own CLI, untouched, plus env. */

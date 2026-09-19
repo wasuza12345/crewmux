@@ -80,6 +80,7 @@ Recommended:
 | `Ctrl-b a` (or `Ctrl-b Ctrl-a`) | jump to the agent that asked you something, answer in its own UI |
 | `Ctrl-b n` (or `Ctrl-b Ctrl-n`) | add an agent: an `open role:` prompt appears in the **top bar**; type the role, Enter |
 | `Ctrl-b X` (capital X) | remove this tab's agent (confirm with `y` in the top bar). Lower-case `Ctrl-b x` is tmux's own kill-pane |
+| `Ctrl-b C` (capital C) | compact this tab's agent — saves tokens on the following turns (confirm with `y`) |
 | `Ctrl-b R` (capital R) | restart this tab's agent — picks up config changes, continues the same conversation (confirm with `y`) |
 | `Ctrl-b z` | zoom the selected pane (hides the sidebar) — again to restore |
 | `Ctrl-b d` | leave; agents keep running. Come back with `crewmux` |
@@ -137,6 +138,23 @@ Every agent's system prompt points at [agent-guide.md](agent-guide.md). Say "add
 codex and open it" or "add the Grok CLI as a new role", and it edits `.crewmux/`, runs
 `crewmux doctor` and `open`. The guide lives only in the crewmux install, so every project sees the
 latest version (an agent that was already running sees it after close + open).
+
+### Compact: save tokens
+
+Every turn resends the whole conversation, so a long, stale context is the biggest token cost.
+Compacting makes the CLI summarise its own conversation.
+
+| Who | How |
+|---|---|
+| you | `crewmux compact coder` / `--all` `--focus "what to keep"`, or `Ctrl-b C` on a tab |
+| agents | the MCP tool `compact` (themselves or another role), at task boundaries — e.g. after a task is delivered |
+| automatic | `compactAt: 150000` on a role → the CLI compacts itself at that size (Claude 100k–1M, Codex any; Grok only via its own config file) |
+
+- The sidebar shows each agent's context (`74%`, or `312k` when the window is unknown), yellow above 70%, `⟳` after a compaction.
+- Agents may compact the same role at most every `config.yaml → compact.minIntervalMinutes` (default 10); you are never limited.
+- Turn agent-initiated compaction off with `compact: { ai: false }` in `config.yaml`.
+- Codex's `/compact` takes no instructions, so `--focus` is ignored for Codex.
+- Custom CLIs: add `cli.compact` and `cli.usage` in YAML (agent-guide §5.1).
 
 ### Add agents / roles
 

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { HarnessMcpServer } from "../src/bridge/mcp-server.js";
-import type { CallerIdentity } from "../src/bridge/tools.js";
+import { ToolError, type CallerIdentity } from "../src/bridge/tools.js";
 import { EventBus } from "../src/core/event-bus.js";
 import { PathPolicy } from "../src/core/policy-engine.js";
 import { SessionRegistry } from "../src/core/session-registry.js";
@@ -13,6 +13,7 @@ import { PolicyConfig } from "../src/config/schema.js";
 import type { HarnessEvent } from "../src/protocol/index.js";
 
 let server: HarnessMcpServer;
+let compactCalls: { by: string; target: string; focus: string }[];
 let sessions: SessionRegistry;
 let events: HarnessEvent[];
 let agentDir: string;
@@ -44,7 +45,15 @@ beforeEach(async () => {
   sessions = new SessionRegistry(bus);
   addSession("s_planner", "planner", "claude");
   addSession("s_coder", "coder", "codex");
-  server = new HarnessMcpServer({ bus, sessions, policy: new PathPolicy(PolicyConfig.parse({ paths: { deny: ["*.env"] } })), agentDir });
+  compactCalls = [];
+  server = new HarnessMcpServer({
+    bus, sessions, policy: new PathPolicy(PolicyConfig.parse({ paths: { deny: ["*.env"] } })), agentDir,
+    usage: (role) => (role === "coder" ? { tokens: 180000, window: 258400 } : undefined),
+    compact: async (by, target, focus) => {
+      if (target === "nobody") throw new ToolError(`no running agent with role "nobody"`);
+      compactCalls.push({ by, target, focus });
+    },
+  });
   await server.start();
 });
 afterEach(() => server.stop());
@@ -55,10 +64,10 @@ describe("harness MCP bridge", () => {
     expect(res.status).toBe(401);
   });
 
-  it("exposes the 6 harness tools", async () => {
+  it("exposes the 7 harness tools", async () => {
     const client = await connect(server.issueToken(identity("s_planner", "planner", "claude")));
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(["ask_user", "guide", "list_agents", "report_artifact", "send_message", "submit_review"]);
+    expect(names).toEqual(["ask_user", "compact", "guide", "list_agents", "report_artifact", "send_message", "submit_review"]);
     await client.close();
   });
 
@@ -129,6 +138,28 @@ describe("harness MCP bridge", () => {
     const r = JSON.parse((await call(client, "guide", { topic: "bypass permissions" })).text);
     expect(r.found).toBeGreaterThan(0);
     expect(r.sections.map((s: { text: string }) => s.text).join("\n")).toContain("--dangerously-skip-permissions");
+    await client.close();
+  });
+
+  it("list_agents reports each agent's context size when known", async () => {
+    const client = await connect(server.issueToken(identity("s_planner", "planner", "claude")));
+    const r = JSON.parse((await call(client, "list_agents")).text);
+    expect(r.yourContext).toBe("unknown");
+    expect(r.peers[0].context).toBe("180000 tokens (70% of 258400)");
+    await client.close();
+  });
+
+  it("compact: defaults to yourself, can target another role; the requester comes from the token", async () => {
+    const client = await connect(server.issueToken(identity("s_planner", "planner", "claude")));
+    await call(client, "compact", { focus: "keep the API decision" });
+    await call(client, "compact", { target: "coder" });
+    expect(compactCalls).toEqual([
+      { by: "planner", target: "planner", focus: "keep the API decision" },
+      { by: "planner", target: "coder", focus: "" },
+    ]);
+    const bad = await call(client, "compact", { target: "nobody" });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toMatch(/no running agent/);
     await client.close();
   });
 

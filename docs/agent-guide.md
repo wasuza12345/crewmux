@@ -81,6 +81,7 @@ paths: { deny: ["*.env", "*.pem", ...] }   # only guards report_artifact, not yo
 | See roles and whether they run | `crewmux status` |
 | Start a role now (re-reads roles.yaml) | `crewmux open <role>` (`--fresh` = new conversation) |
 | Stop a role (resumable later) | `crewmux close <role>` |
+| Compact a role (save tokens) | MCP `compact(target?, focus?)`, or `crewmux compact <role> --focus "…"` |
 | Restart a role — yourself included (applies config, same conversation) | `crewmux restart <role>` — do it yourself, do not ask the human |
 | Apply changed flags/model/prompt to a running role | `crewmux restart <role>` (never `close && open` on your own role: `close` kills your shell first) |
 | Apply config.yaml / policy.yaml changes | ask the human to run `crewmux down && crewmux` |
@@ -176,6 +177,39 @@ Only when the human asks for it explicitly:
 - codex: `args: ["--dangerously-bypass-approvals-and-sandbox"]` (milder: `["-a", "never", "-s", "workspace-write"]`)
 - To bypass only some roles, create a second agent file (e.g. `agents/codex-yolo.yaml`) and point those roles at it.
 - Warn the human: with `isolation: shared` every agent edits the same files unprompted.
+
+## 5.1 Compacting (saving tokens)
+
+Every turn resends the whole conversation, so a long, stale context is the biggest token cost.
+Each CLI can compact (summarise) its own conversation; crewmux only triggers it.
+
+| Who | How |
+|---|---|
+| any agent | MCP tool `compact(target?, focus?)` — yourself by default, or another role (e.g. after it delivered its task) |
+| the human | `crewmux compact <role>` / `--all` `[--focus "…"]`, or `Ctrl-b C` on a tab |
+| automatic | `compactAt: <tokens>` on a role → the CLI compacts itself at that size (Claude 100k–1M; Codex any; Grok: not a flag) |
+
+When to call it — judge by the **task boundary** first, the number second:
+
+| Compact | Do not compact |
+|---|---|
+| a task is finished and its result reported | mid-task (debugging, waiting for test output) |
+| before unrelated new work | while waiting for an answer that needs the details |
+| after reading long logs/diffs you no longer need | right after a compaction (AI requests are rate-limited, `config.yaml → compact.minIntervalMinutes`) |
+| `list_agents` shows the context above ~70% | |
+
+Before compacting, make what matters survive: decisions, file paths, open TODOs and pending message
+ids go into `focus` (Codex ignores `focus` — send them to yourself or share them with `report_artifact`
+first). The human can turn AI compaction off with `compact: { ai: false }` in `config.yaml`.
+
+**Custom CLIs** declare it in YAML:
+```yaml
+cli:
+  compact: { command: "/compact {focus}", auto: ["--autocompact", "{tokens}"] }   # auto is optional
+  usage:   { file: "~/.mycli/sessions/{id}.jsonl", pattern: '"input_tokens":(\d+)', window: 200000 }
+```
+`usage` lets `list_agents` and the sidebar show the context size (last regex match, group 1). Without
+`compact.command` the agent simply cannot be compacted (a clear error says so).
 
 ## 6. Rules
 

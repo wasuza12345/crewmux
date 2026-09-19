@@ -1,5 +1,7 @@
 import { HARNESS_MCP_NAME } from "../../protocol/index.js";
+import { homedir } from "node:os";
 import { HARNESS_ENV, harnessEnv, type AgentLauncher } from "../launcher.js";
+import { autoCompactArgs } from "../presets.js";
 
 /** TOML basic string — JSON string escaping is a valid subset. */
 const toml = (s: string) => JSON.stringify(s);
@@ -27,6 +29,7 @@ export const codexLauncher: AgentLauncher = {
         // instead of ours and messages never arrived. The harness is the multi-agent layer here.
         "-c", "features.multi_agent=false",
         ...(model ? ["-m", model] : []),
+        ...autoCompactArgs(def, ctx.compactAt, homedir()),
         ...def.args,
         ...(ctx.resumeId ? [ctx.resumeId] : []),
       ],

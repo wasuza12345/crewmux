@@ -25,6 +25,10 @@ export interface BridgeDeps {
   sessions: SessionRegistry;
   policy: PathPolicy;
   agentDir: string;
+  /** Latest known context size of a role (runtime reads it from the CLI's session files). */
+  usage?: (role: string) => { tokens: number; window?: number } | undefined;
+  /** Type the CLI's compact command into a role's session. Throws ToolError when not allowed. */
+  compact?: (by: string, target: string, focus: string) => Promise<void>;
 }
 
 export class ToolError extends Error {}
@@ -53,6 +57,10 @@ export const TOOL_INPUTS = {
   ask_user: {
     question: z.string().min(1),
   },
+  compact: {
+    target: z.string().optional().describe("Role to compact; omit for yourself"),
+    focus: z.string().default("").describe("What the summary must keep: decisions, file paths, open TODOs, pending message ids"),
+  },
   guide: {
     topic: z.string().default("").describe('What the user wants, e.g. "add grok", "bypass permissions", "resume", "keys". Empty = list all topics.'),
   },
@@ -64,6 +72,10 @@ export const TOOL_DESCRIPTIONS: Record<keyof typeof TOOL_INPUTS, string> = {
   submit_review: "Send your review verdict to the role whose work you reviewed.",
   report_artifact: "Register a file you produced (diff, test report, analysis, ...) so you can attach it to a message by id.",
   ask_user: "Ask the human a question. The answer arrives later as normal input; end your turn after asking.",
+  compact:
+    "Compact an agent's conversation (yours by default) to save tokens. It runs after the target's current turn. " +
+    "Use at task boundaries — after a task is finished and reported, before unrelated new work, after reading long logs/diffs — " +
+    "never mid-task or while you wait for an answer that needs the details. Put what must survive in `focus`.",
   guide:
     "The crewmux manual. Call it BEFORE answering any question about using or configuring crewmux " +
     "(roles, adding a CLI such as grok, models, bypass/permissions, resume, keys, troubleshooting) or editing .crewmux/. " +
@@ -85,14 +97,21 @@ export function createToolHandlers(deps: BridgeDeps, caller: CallerIdentity) {
     return { messageId: envelope.id, status: "queued" as const };
   };
 
+  const contextOf = (role: string) => {
+    const u = deps.usage?.(role);
+    if (!u) return "unknown";
+    return u.window ? `${u.tokens} tokens (${Math.round((u.tokens / u.window) * 100)}% of ${u.window})` : `${u.tokens} tokens`;
+  };
+
   return {
     list_agents(_: Inputs["list_agents"]) {
       return {
         you: { role: caller.role, agentId: caller.agentId },
+        yourContext: contextOf(caller.role),
         peers: deps.sessions
           .list()
           .filter((s) => s.status !== "exited" && s.id !== caller.sessionId)
-          .map((s) => ({ role: s.role, agentId: s.agentId, kind: s.kind, status: s.status })),
+          .map((s) => ({ role: s.role, agentId: s.agentId, kind: s.kind, status: s.status, context: contextOf(s.role) })),
       };
     },
 
@@ -124,6 +143,13 @@ export function createToolHandlers(deps: BridgeDeps, caller: CallerIdentity) {
 
     ask_user(input: Inputs["ask_user"]) {
       return route(USER, "question", input.question);
+    },
+
+    async compact(input: Inputs["compact"]) {
+      if (!deps.compact) throw new ToolError("compaction is not available in this harness");
+      const target = input.target ?? caller.role;
+      await deps.compact(caller.role, target, input.focus);
+      return { target, status: "queued", note: "runs when the target's current turn ends" };
     },
 
     guide(input: Inputs["guide"]) {
