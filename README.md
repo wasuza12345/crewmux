@@ -26,7 +26,7 @@ delivers messages between them.
 
 - **One command per project** — `crewmux` creates `.crewmux/` on first use and opens the team.
 - **Agents talk to each other** — MCP tools `send_message`, `submit_review`, `report_artifact`,
-  `ask_user`, `list_agents`; a message is pasted into the recipient's terminal.
+  `ask_user`, `list_agents`, `update_board`; a message is pasted into the recipient's terminal.
 - **Resume** — close and reopen, each role continues its own conversation (Claude, Codex, Grok).
 - **Add / remove agents while running** — `crewmux open <role>` / `crewmux close <role>`
   (or `Ctrl-b n` / `Ctrl-b X`); `roles.yaml` is re-read on open.
@@ -34,6 +34,11 @@ delivers messages between them.
   no code change needed. Grok support is just such a preset.
 - **Built-in help for agents** — the `guide` MCP tool lets an agent answer "how do I configure…"
   and do it for you.
+- **Status boards in the browser** — `Ctrl-b B` / `crewmux board [name]` (127.0.0.1, a new token
+  every run): `team` is generated from what the agents do, `plan` follows your `plan.md`
+  (`- [x]` / `- [~]` / `- [!]` + 🟢🟡🟠⚪), and agents write `release` (GO / NO-GO), `review`,
+  `debug` and `handoff` boards with `update_board`. `crewmux board export <name>` saves one
+  self-contained HTML file to attach to a PR.
 - **Isolated** — one private tmux server per project (`tmux -L crewmux-<project>`); your own tmux
   and your CLIs' global configs are never modified.
 
@@ -68,6 +73,7 @@ crewmux down                              # stop everything (conversations resum
 | `Ctrl-b n` / `Ctrl-b X` | add / remove an agent |
 | `Ctrl-b m` | all messages (popup) |
 | `Ctrl-b a` | jump to the agent that asked you something |
+| `Ctrl-b B` | open the team board in the browser |
 | `Ctrl-b d` or `q` in the sidebar | leave; agents keep running |
 
 VS Code's terminal takes `Ctrl+B` for its sidebar — set `"terminal.integrated.sendKeybindingsToShell": true`.
@@ -101,7 +107,8 @@ Every field is documented in [docs/agent-guide.md](docs/agent-guide.md).
 ## Security
 
 - The MCP server listens on `127.0.0.1` only; each agent session gets its own bearer token, and
-  the sender of every message is taken from that token.
+  the sender of every message is taken from that token. Board pages are served on the same
+  127.0.0.1 port and need a separate per-run view token (stored 0600, never logged).
 - Permission prompts stay with each vendor CLI. Bypass flags are opt-in per agent — read
   [SECURITY.md](SECURITY.md) before enabling them (agents can prompt-inject each other).
 

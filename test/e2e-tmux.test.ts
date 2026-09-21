@@ -1,5 +1,6 @@
-import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -37,6 +38,11 @@ describe.skipIf(!hasTmux)("e2e: native CLIs in tmux, talking through the harness
 
   beforeAll(async () => {
     root = mkdtempSync(join(tmpdir(), "harness-e2e-"));
+    // Browser stand-in for `crewmux board` (C-b B): records the URL instead of opening anything.
+    // Set before the tmux server starts so run-shell inherits it, like a user's $BROWSER.
+    writeFileSync(join(root, "browser.sh"), `#!/bin/sh\necho "$1" >> "${root}/opened.txt"\n`);
+    chmodSync(join(root, "browser.sh"), 0o755);
+    process.env.BROWSER = join(root, "browser.sh");
     cpSync(resolve(import.meta.dirname, "../templates/.crewmux/prompts"), join(root, ".crewmux/prompts"), { recursive: true });
     mkdirSync(join(root, ".crewmux/agents"), { recursive: true });
     writeFileSync(join(root, ".crewmux/config.yaml"), "version: 1\nproject: e2e\ndelivery: { pasteDelayMs: 50 }\ncompact: { minIntervalMinutes: 10 }\n");
@@ -187,6 +193,72 @@ describe.skipIf(!hasTmux)("e2e: native CLIs in tmux, talking through the harness
     writeFileSync(file, `${template}\n`);
     await tmux.tmux("source-file", file);
     await waitFor("tester reopened", () => harness.sessions.byRole("tester")?.status === "running", 20000);
+  });
+
+  it("the C-b B binding exists on real tmux and, when tmux runs it, opens a board URL that serves page + team data", { timeout: 30000 }, async () => {
+    expect(await tmux.tmux("list-keys", "-T", "prefix", "B")).toContain(" board 2>&1");
+    const bind = chromeCommands({ cli: CLI, cwd: root }).find((c) => c[0] === "bind-key" && c[1] === "B")!;
+    const file = join(root, "board.tmux");
+    writeFileSync(file, `${bind.at(-1)!}\n`);
+    await tmux.tmux("source-file", file);
+    const opened = join(root, "opened.txt");
+    await waitFor("browser opened with the board URL", () => existsSync(opened) && readFileSync(opened, "utf8").includes("/board/team?t="), 20000);
+    const url = new URL(readFileSync(opened, "utf8").trim().split("\n").at(-1)!);
+    expect(url.hostname).toBe("127.0.0.1");
+
+    const page = await fetch(url);
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("<title>Board</title>");
+    const data = await (await fetch(`${url.origin}/board/team.json${url.search}`)).json();
+    expect(data.name).toBe("team");
+    expect(data.columns.map((c: { title: string }) => c.title)).toEqual(expect.arrayContaining(["planner", "coder", "tester"]));
+    expect((await fetch(`${url.origin}/board/team.json`)).status).toBe(401);
+    // the token file the sidebar reads is private to the user
+    expect(statSync(join(root, ".crewmux/state/board-view.json")).mode & 0o777).toBe(0o600);
+  });
+
+  it("plan board: generated from plan.md in the project, follows edits to the file live", { timeout: 15000 }, async () => {
+    const url = new URL(harness.boardUrl("plan"));
+    const json = `${url.origin}/board/plan.json${url.search}`;
+    expect((await fetch(json)).status).toBe(404); // no plan file yet
+    writeFileSync(join(root, "plan.md"), "# E2E plan\n\n## Build\n- [x] schema 🟢\n- [~] page\n\n## Out of scope\n- deploy\n");
+    const first = await (await fetch(json)).json();
+    expect(first).toMatchObject({ name: "plan", kind: "plan", title: "E2E plan", updatedBy: "plan.md", outOfScope: ["deploy"] });
+    expect(first.columns[0].cards.map((c: { title: string; status: string }) => `${c.title}:${c.status}`)).toEqual(["schema:done", "page:active"]);
+    const list = await (await fetch(`${url.origin}/board.json${url.search}`)).json();
+    expect(list.boards.map((b: { name: string; source: string }) => `${b.name}:${b.source}`)).toEqual(["team:generated", "plan:file"]);
+    // the list page shows kind, updatedAt and updatedBy for every board
+    expect(list.boards[1]).toMatchObject({ kind: "plan", updatedBy: "plan.md", updatedAt: expect.any(Number) });
+    expect(list.boards[0]).toMatchObject({ updatedBy: "harness", updatedAt: expect.any(Number) });
+
+    await new Promise((r) => setTimeout(r, 20)); // a distinct mtime even on coarse clocks
+    writeFileSync(join(root, "plan.md"), "# E2E plan\n\n## Build\n- [x] schema 🟢\n- [x] page\n- [!] blocked on review\n");
+    await waitFor("edit reflected", async () => {
+      const b = await (await fetch(json)).json();
+      return b.columns[0].cards.length === 3 && b.banner?.status === "blocked";
+    });
+  });
+
+  it("board export (the real CLI): one self-contained file with the data embedded and no view token", { timeout: 30000 }, async () => {
+    // async: the control server the CLI talks to runs in this very process
+    const run = async (...args: string[]) =>
+      (await promisify(execFile)(`${REPO}/node_modules/.bin/tsx`, [`${REPO}/src/cli.ts`, "board", "export", ...args], { cwd: root, encoding: "utf8", timeout: 20000 })).stdout;
+    const token = JSON.parse(readFileSync(join(root, ".crewmux/state/board-view.json"), "utf8")).token as string;
+    // team lives in the running harness → fetched over the control socket; --out picks the file
+    const teamOut = join(root, "exports/team.html");
+    expect(await run("team", "--out", teamOut)).toContain(teamOut);
+    const team = readFileSync(teamOut, "utf8");
+    expect(team).toContain('id="board-snapshot"');
+    expect(team).toContain('"name":"team"');
+    expect(team).not.toContain(token);
+    // plan comes from plan.md on disk; default path .crewmux/boards/plan-<yyyymmdd-hhmm>.html
+    const printed = await run("plan");
+    const file = /exported board plan: (.+\.html)$/m.exec(printed)![1]!;
+    expect(file).toMatch(/\.crewmux\/boards\/plan-\d{8}-\d{4}\.html$/);
+    const plan = readFileSync(file, "utf8");
+    expect(plan).toContain('"title":"E2E plan"');
+    expect(plan).not.toContain(token);
+    await expect(run("nope")).rejects.toThrow(/no board named "nope"/);
   });
 
   it("every event was persisted to SQLite", async () => {

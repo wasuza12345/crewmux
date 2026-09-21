@@ -54,6 +54,8 @@ Recommended:
 | `crewmux up --fresh` | start every role with a new conversation instead of resuming |
 | `crewmux down` | stop the session, every agent, and revoke all tokens |
 | `crewmux open <role>` / `close <role>` / `status` | add / remove / list agents while running (see "Add agents / roles") |
+| `crewmux board [name] [--no-open]` | print a board's URL (default `team`) and open it in a browser (see "Boards") |
+| `crewmux board export <name> [--out <file>]` | save a board as one self-contained HTML file (snapshot) |
 | `crewmux init [--force]` | only create `.crewmux/`; `--force` overwrites template files |
 | `crewmux doctor` | check the config, tmux, and every agent binary the roles use |
 | `CREWMUX_DEBUG=1 crewmux up` | log every MCP call in the harness window (troubleshooting) |
@@ -82,6 +84,7 @@ Recommended:
 | `Ctrl-b X` (capital X) | remove this tab's agent (confirm with `y` in the top bar). Lower-case `Ctrl-b x` is tmux's own kill-pane |
 | `Ctrl-b C` (capital C) | compact this tab's agent — saves tokens on the following turns (confirm with `y`) |
 | `Ctrl-b R` (capital R) | restart this tab's agent — picks up config changes, continues the same conversation (confirm with `y`) |
+| `Ctrl-b B` (capital B) | open the `team` board in the browser; the URL also shows in the top bar (see "Boards") |
 | `Ctrl-b z` | zoom the selected pane (hides the sidebar) — again to restore |
 | `Ctrl-b d` | leave; agents keep running. Come back with `crewmux` |
 | `q` in the sidebar or the harness window | leave, like `Ctrl-b d` — works even when the terminal steals `Ctrl-b` |
@@ -156,6 +159,62 @@ Compacting makes the CLI summarise its own conversation.
 - Codex's `/compact` takes no instructions, so `--focus` is ignored for Codex.
 - Custom CLIs: add `cli.compact` and `cli.usage` in YAML (agent-guide §5.1).
 
+### Boards: a status page in the browser
+
+A board is a read-only web page for the project that you keep open next to tmux: a banner, KPI
+tiles, columns of cards, connectors between cards and an "out of scope" list. It refreshes every
+2.5 s, follows dark/light mode and works at phone width.
+
+| Board | Written by | Open it with |
+|---|---|---|
+| `team` | crewmux itself: which agents run / ask you / stopped, context %, open questions, who messaged whom (solid line = delivered · dashed = waiting for a reply) | `Ctrl-b B` or `crewmux board` |
+| `plan` | generated from the project's `plan.md` (next section); saving the file updates the page · if an agent writes a board named `plan`, the agent's board is shown instead of the file | `crewmux board plan` |
+| any other name, e.g. `release-1` | an agent, through the MCP tool `update_board` (just ask, e.g. "make a release board: GO or NO-GO?") | `crewmux board release-1`, or the "all boards" link on any board |
+
+The "all boards" page (`/board`) lists every board with its kind, where it comes from (generated /
+plan file / agent), when it was updated and by whom.
+
+- `crewmux board [name]` prints the URL and tries to open a browser (`$BROWSER` → `wslview` / `cmd.exe start` on WSL → `open` on macOS → `xdg-open`); `--no-open` only prints it.
+- `Ctrl-b B` does the same and shows the URL in the top bar for 4 s · the sidebar has a short `C-b B board` line · `Ctrl-b m` shows the full URL of the "all boards" page to copy.
+- The URL ends in `?t=<token>`; the token is new every time the harness starts, a missing or wrong one gets 401 · it only works on this machine (127.0.0.1) — do not share it.
+- Card status: `done` · `active` · `blocked` · `todo` · `info` · proof tier: 🟢 runtime · 🟡 compile · 🟠 static · ⚪ none.
+- Boards agents write live in `.crewmux/state/boards/<name>.json`; `team` is never stored, it is rebuilt from events on every request.
+- Board kinds (`kind`) agents use: `plan` · `release` pre-release checks (columns Checks/Tests/Docs/Ship; the banner must start with `GO` or `NO-GO`) · `review` findings (BLOCKER/MAJOR/MINOR) · `debug` a bug hunt (symptom → hypotheses → evidence → fix) · `handoff` before compacting or handing over (done / in progress / next / questions / files) · agents get each layout from `guide("board <kind>")`.
+
+#### The `plan` board from plan.md
+
+Write the plan as plain markdown in the project and open `crewmux board plan`; the page updates
+every time you save the file.
+
+```markdown
+# Auth refresh                     ← board title
+Single-flight refresh for mobile.  ← subtitle (first paragraph under the title)
+
+## Build                           ← each ## heading = one column
+- [x] schema 🟢                    ← done · 🟢 = proven by running it
+- [~] refresh queue 🟡             ← in progress · 🟡 = compiles
+  - retries with backoff           ← indented lines = the card's details
+- [!] waiting for API access       ← blocked
+- [ ] docs                         ← todo
+- a plain bullet                   ← a note (info, not counted as a task)
+
+## Out of scope                    ← not a column: the "out of scope" list
+- deploy to production
+```
+
+- Markers: `[x]` done · `[ ]` todo · `[~]` in progress · `[!]` blocked · the proof emoji can be anywhere on the line: 🟢 runtime · 🟡 compile · 🟠 static · ⚪ none.
+- The KPI tiles (done/total, in progress, blocked, todo) are computed · `###` headings, paragraphs and code blocks are ignored.
+- Which file: the first of `plan.md`, `PLAN.md`, `.crewmux/plan.md`, or set it in `config.yaml` → `boards: { plan: docs/plan.md }` (a path inside the project, no `..` · a symlink pointing outside the project is not read).
+- If an agent writes a board named `plan` with `update_board`, that one is shown instead of the file; delete `.crewmux/state/boards/plan.json` to go back to the file.
+
+#### Export to one file
+
+`crewmux board export <name> [--out <file>]` saves a board as one HTML file with the data inside:
+it opens without crewmux running, has no token and never refreshes (the corner says
+"snapshot <time>"). Without `--out` it goes to `.crewmux/boards/<name>-<yyyymmdd-hhmm>.html` and the
+path is printed · `team` can only be exported while the harness runs; other boards are read from
+disk · fine to attach to a PR or send to someone (the file contains only the board).
+
 ### Add agents / roles
 
 1. **Existing CLI profile** (claude, codex, grok): just add a role to `.crewmux/roles.yaml`:
@@ -219,6 +278,7 @@ delivery:
 | `baseBranch` | `main` | |
 | `isolation` | `shared` | `shared`: every agent works in the repo root · `worktree`: each role gets `.crewmux/state/worktrees/<runId>/<role>` on branch `agent/<runId>/<role>` |
 | `delivery.pasteDelayMs` | `300` | increase it if a message is pasted but not submitted |
+| `boards.plan` | unset = `plan.md` → `PLAN.md` → `.crewmux/plan.md` | markdown file the `plan` board is generated from (relative to the project root, must stay inside it) |
 
 > `worktree` mode: crewmux does not remove or merge worktrees yet — use `git worktree list` /
 > `git worktree remove <path>`.

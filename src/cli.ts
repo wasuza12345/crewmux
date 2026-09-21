@@ -2,6 +2,7 @@
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 import { AGENT_DIR, findAgentDir, loadConfig, type LoadedConfig } from "./config/load.js";
 import { Harness } from "./runtime/harness.js";
 import { effectiveCli } from "./agents/presets.js";
@@ -9,6 +10,9 @@ import * as tmux from "./terminal/tmux.js";
 import { chromeCommands } from "./terminal/chrome.js";
 import { runPanel } from "./ui/panel-runner.js";
 import { controlSocketPath, sendControl, startControlServer, stopControlServer } from "./runtime/control.js";
+import { ProjectBoards } from "./runtime/project-boards.js";
+import { BOARD_PAGE, exportFileName, snapshotHtml } from "./runtime/board-export.js";
+import { BoardName, TEAM_BOARD, type Board } from "./protocol/index.js";
 
 const TEMPLATE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "templates", AGENT_DIR);
 
@@ -24,6 +28,10 @@ const USAGE = `crewmux — run Claude Code, Codex and other agent CLIs side by s
   crewmux compact <role>|--all [--focus "…"]  compact conversations to save tokens  · tmux: Ctrl-b C
   crewmux restart <role> [--fresh]    reopen a role with its latest config             · tmux: Ctrl-b R
   crewmux status                      roles and whether they are running
+  crewmux board [name] [--no-open]    print the board URL (default: team) and open a browser · tmux: Ctrl-b B
+  crewmux board export <name> [--out <file>]
+                                         save a board as one self-contained HTML snapshot
+                                         (default .crewmux/boards/<name>-<yyyymmdd-hhmm>.html)
   crewmux doctor                      check config, tmux and agent binaries
   crewmux init [--force]              only create .crewmux/ in the current directory
   crewmux help                        this text
@@ -85,6 +93,58 @@ function doctor(): boolean {
     check(onPath(bin), `agent "${id}" (${def.kind}) → ${bin}`);
   }
   return ok;
+}
+
+/**
+ * Best-effort: hand the URL to a browser without waiting for it or printing its noise.
+ * $BROWSER wins (the usual convention), then WSL → Windows, macOS, and xdg-open. Returns what was used.
+ */
+function openInBrowser(url: string): string | undefined {
+  const wsl = Boolean(process.env.WSL_DISTRO_NAME);
+  const candidates: string[][] = [
+    ...(process.env.BROWSER ? [process.env.BROWSER.split(" ").filter(Boolean)] : []),
+    ...(wsl ? [["wslview"], ["cmd.exe", "/c", "start", ""]] : []),
+    ...(process.platform === "darwin" ? [["open"]] : []),
+    ["xdg-open"],
+  ];
+  for (const [bin, ...pre] of candidates) {
+    if (!bin || !onPath(bin)) continue;
+    try {
+      spawn(bin, [...pre, url], { detached: true, stdio: "ignore" }).on("error", (err) => console.error(`could not start ${bin}: ${err.message}`)).unref();
+      return bin;
+    } catch (err) {
+      console.error(`could not start ${bin}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * `board export <name> [--out <file>]`: one self-contained HTML file with the board's data embedded.
+ * Authored and plan boards are read from disk (works without a running harness); `team` exists only
+ * inside a running harness, so it is fetched over the control socket.
+ */
+async function exportBoard(raw: string[]): Promise<void> {
+  const oi = raw.indexOf("--out");
+  const out = oi >= 0 ? raw[oi + 1] : undefined;
+  if (oi >= 0 && (!out || out.startsWith("--"))) throw new Error("usage: crewmux board export <name> [--out <file>]");
+  const name = raw.find((a, i) => !a.startsWith("--") && (oi < 0 || i !== oi + 1));
+  if (!name) throw new Error("usage: crewmux board export <name> [--out <file>]");
+  const cfg = loadConfig();
+  let board: Board | undefined;
+  if (name === TEAM_BOARD) {
+    board = (await sendControl(cfg.dir, { action: "board-data", name })) as Board;
+  } else {
+    if (!BoardName.safeParse(name).success) throw new Error(`"${name}" is not a board name (lowercase letters, digits and "-")`);
+    const boards = new ProjectBoards({ root: cfg.root, agentDir: cfg.dir, ...(cfg.project.boards.plan ? { planPath: cfg.project.boards.plan } : {}) });
+    board = boards.get(name);
+  }
+  if (!board) throw new Error(`no board named "${name}" — agents write boards with update_board; "plan" needs plan.md`);
+  const now = new Date();
+  const file = out ? resolve(out) : join(cfg.dir, "boards", exportFileName(name, now));
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, snapshotHtml(readFileSync(BOARD_PAGE, "utf8"), board, now.getTime()));
+  console.log(`exported board ${name}: ${file}`);
 }
 
 async function up(roles: string[], attach: boolean, fresh = false): Promise<void> {
@@ -287,6 +347,13 @@ async function main(argv: string[]): Promise<void> {
       const req = cmd === "open" ? { action: "open" as const, role, fresh: flags.has("--fresh") } : { action: "close" as const, role };
       await sendControl(cfg.dir, req);
       console.log(cmd === "open" ? `opened ${role}` : `closed ${role} — \`crewmux open ${role}\` brings it back (claude/codex continue the same conversation)`);
+      return;
+    }
+    case "board": {
+      if (args[0] === "export") return exportBoard(argv.slice(2));
+      const { url } = (await sendControl(loadConfig().dir, { action: "board", ...(args[0] ? { name: args[0] } : {}) })) as { url: string };
+      const opener = flags.has("--no-open") ? undefined : openInBrowser(url);
+      console.log(opener ? `board: ${url} (opened with ${basename(opener)})` : `board: ${url}`);
       return;
     }
     case "status": {

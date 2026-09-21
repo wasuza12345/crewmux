@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import { z } from "zod";
 
 /** .crewmux/config.yaml */
@@ -16,6 +17,13 @@ export const ProjectConfig = z.object({
   delivery: z.object({
     /** Wait between pasting a message and pressing Enter, so the CLI finishes handling the paste. */
     pasteDelayMs: z.number().int().nonnegative().default(300),
+  }).prefault({}),
+  boards: z.object({
+    /** Markdown file the `plan` board is generated from, relative to the project root.
+     *  Default: the first of plan.md, PLAN.md, .crewmux/plan.md that exists. Symlinks are checked at read time. */
+    plan: z.string().min(1).refine((p) => !isAbsolute(p) && !/^[A-Za-z]:/.test(p) && !p.replaceAll("\\", "/").split("/").includes(".."), {
+      message: "boards.plan must be a path relative to the project root that stays inside it (no leading / and no ..)",
+    }).optional(),
   }).prefault({}),
 });
 export type ProjectConfig = z.infer<typeof ProjectConfig>;

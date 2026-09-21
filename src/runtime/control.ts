@@ -15,6 +15,8 @@ type Request =
   | { action: "close"; role: string }
   | { action: "restart"; role: string; fresh?: boolean }
   | { action: "compact"; role: string; focus?: string }
+  | { action: "board"; name?: string }
+  | { action: "board-data"; name: string }
   | { action: "status" };
 
 export async function startControlServer(harness: Harness, agentDir: string): Promise<Server> {
@@ -33,6 +35,8 @@ export async function startControlServer(harness: Harness, agentDir: string): Pr
           else if (r.action === "compact") result = await harness.compact(r.role, { focus: r.focus ?? "" });
           else if (r.action === "restart") result = await harness.restart(r.role, { fresh: Boolean(r.fresh) });
           else if (r.action === "status") result = harness.status();
+          else if (r.action === "board") result = { url: harness.boardUrl(r.name) };
+          else if (r.action === "board-data") result = harness.board(r.name);
           else throw new Error("unknown action");
           res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, result: result ?? null }));
         } catch (err) {

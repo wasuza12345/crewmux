@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Board</title>
+<!--
+  crewmux board page, two modes from this one file:
+  · live: served by the harness at /board/<name>?t=<view token>; polls /board/<name>.json with the same token.
+  · snapshot: `crewmux board export` replaces the marker below with the board JSON; no polling, no token.
+  Self-contained: no external requests (CSP forbids them).
+  All board text is untrusted (agents write it) — it is only ever set through textContent.
+-->
+<!--board-snapshot-->
+<style>
+:root{
+  --bg:#f6f7f9;--panel:#ffffff;--ink:#16181d;--muted:#5f6673;--line:#d9dde4;--edge:#94a3b8;--code:#e2e8f0;
+  --done:#15803d;--donebg:#dcfce7;--active:#0e7490;--activebg:#cffafe;--blocked:#b91c1c;--blockedbg:#fee2e2;
+  --todo:#6b7280;--todobg:#eceef1;--info:#4338ca;--infobg:#e0e7ff;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f1115;--panel:#171a21;--ink:#e7e9ee;--muted:#9aa3b2;--line:#2a2f3a;--edge:#4b5563;--code:#1e2533;
+  --done:#4ade80;--donebg:#12261a;--active:#22d3ee;--activebg:#0d2429;--blocked:#f87171;--blockedbg:#2a1517;
+  --todo:#9ca3af;--todobg:#1f232b;--info:#a5b4fc;--infobg:#1c1f3a;
+}}
+:root[data-theme="dark"]{
+  --bg:#0f1115;--panel:#171a21;--ink:#e7e9ee;--muted:#9aa3b2;--line:#2a2f3a;--edge:#4b5563;--code:#1e2533;
+  --done:#4ade80;--donebg:#12261a;--active:#22d3ee;--activebg:#0d2429;--blocked:#f87171;--blockedbg:#2a1517;
+  --todo:#9ca3af;--todobg:#1f232b;--info:#a5b4fc;--infobg:#1c1f3a;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{background:var(--bg)}
+body{margin:0;color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI","Noto Sans Thai","Noto Sans",sans-serif}
+.wrap{max-width:1480px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:1.45rem;margin:0 0 4px;overflow-wrap:anywhere}
+.sub{color:var(--muted);margin:0 0 14px;font-size:.9rem;overflow-wrap:anywhere}
+.meta{color:var(--muted);font-size:.8rem;display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin:0 0 10px}
+.live{display:inline-flex;align-items:center;gap:6px}
+.live i{width:8px;height:8px;border-radius:50%;background:var(--done);display:inline-block}
+.live.off i{background:var(--blocked)}
+.live.snap i{background:var(--todo)}
+.banner{border:1px solid currentColor;border-radius:12px;padding:10px 14px;margin:12px 0;font-size:.92rem;font-weight:600;overflow-wrap:anywhere}
+.nums{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}
+.num{background:var(--panel);border:1px solid var(--line);border-left-width:4px;border-radius:12px;padding:8px 14px;min-width:120px;max-width:100%}
+.num b{display:block;font-size:1.4rem;line-height:1.2;overflow-wrap:anywhere}
+.num span{color:var(--muted);font-size:.8rem}
+.num small{display:block;color:var(--muted);font-size:.72rem}
+.legend{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 12px}
+.chip{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:999px;padding:4px 12px;font:inherit;font-size:.82rem;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.chip[aria-pressed="false"]{opacity:.4}
+.dot{width:10px;height:10px;border-radius:3px;display:inline-block}
+.lines{color:var(--muted);font-size:.78rem;display:inline-flex;gap:14px;align-items:center;flex-wrap:wrap}
+.lines svg{vertical-align:middle}
+.board{display:grid;grid-template-columns:1fr;gap:12px}
+.board>*{min-width:0}
+.canvas{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow-x:auto}
+.stage{position:relative;min-width:min-content}
+.cols{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(230px,1fr);gap:72px;padding:14px 44px 20px 18px;position:relative;z-index:1}
+.col h2{font-size:.82rem;font-weight:700;color:var(--muted);letter-spacing:.02em;margin:0 0 10px;text-transform:uppercase;overflow-wrap:anywhere}
+.col .count{font-weight:400;margin-left:6px}
+.card{display:block;width:100%;text-align:left;font:inherit;color:inherit;border:1.6px solid;border-radius:9px;padding:8px 10px;margin:0 0 12px;cursor:pointer;background:var(--panel)}
+.card:hover,.card.sel{border-width:3px;padding:6.6px 8.6px}
+.card.dim{opacity:.18}
+.card .t{font-size:.9rem;font-weight:600;display:block;overflow-wrap:anywhere}
+.card .b{font-size:.8rem;color:var(--muted);display:block;margin-top:2px;overflow-wrap:anywhere;white-space:pre-wrap;max-height:6.2em;overflow:hidden}
+.card .row{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;align-items:center}
+.pill{border-radius:6px;padding:1px 7px;font-size:.72rem;font-weight:600;white-space:nowrap}
+.tag{border:1px solid var(--line);border-radius:6px;padding:0 6px;font-size:.72rem;color:var(--muted);overflow-wrap:anywhere}
+svg.edges{position:absolute;left:0;top:0;pointer-events:none;z-index:0;overflow:visible}
+svg.edges.labels{z-index:2}
+.edge{fill:none;stroke:var(--edge);stroke-width:1.6}
+.edge.dashed{stroke-dasharray:6 4}
+.edge.dotted{stroke-dasharray:2 4}
+.edge.dim{opacity:.15}
+.elabel{font-size:11px;fill:var(--muted)}
+.elabel-bg{fill:var(--panel)}
+.side{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 16px;min-height:80px}
+.side h2{font-size:1.05rem;margin:0 0 6px;overflow-wrap:anywhere}
+.side .hint{color:var(--muted);margin:0;font-size:.88rem}
+.side dl{margin:8px 0 0;display:grid;grid-template-columns:78px 1fr;gap:6px 10px;font-size:.88rem}
+.side dt{color:var(--muted)}
+.side dd{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
+.oos{background:var(--panel);border:1px dashed var(--line);border-radius:12px;padding:10px 14px;margin:16px 0;font-size:.88rem}
+.oos h2{font-size:.95rem;margin:0 0 6px;color:var(--muted)}
+.oos ul{margin:0;padding-left:20px}
+.oos li{overflow-wrap:anywhere}
+.empty{color:var(--muted);padding:24px 18px}
+.list a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:0 0 10px;color:inherit;text-decoration:none}
+.list a:hover{border-color:var(--active)}
+.list b{display:block}
+.list span{color:var(--muted);font-size:.82rem;overflow-wrap:anywhere}
+.list b{overflow-wrap:anywhere}
+.list .kind{font-style:normal;font-weight:600;font-size:.72rem;color:var(--info);background:var(--infobg);border-radius:6px;padding:1px 7px;margin-left:8px;vertical-align:middle}
+@media (max-width:640px){
+  .cols{grid-auto-flow:row;grid-auto-columns:auto;grid-template-columns:1fr;gap:18px;padding:12px 56px 12px 12px}
+  .num{min-width:calc(50% - 5px);flex:1 1 calc(50% - 5px)}
+  .side dl{grid-template-columns:64px 1fr}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title">Loading board…</h1>
+  <p class="sub" id="subtitle"></p>
+  <div class="meta"><span class="live" id="live"><i></i><span id="liveText">connecting</span></span><span id="updated"></span><a id="allBoards" href="#" style="color:inherit">all boards</a></div>
+  <div id="banner" class="banner" hidden></div>
+  <div class="nums" id="kpis"></div>
+  <div class="legend" id="legend"></div>
+  <div class="board" id="boardArea">
+    <aside class="side" id="side"><h2>Select a card</h2><p class="hint">Solid line = flow / delivered · dashed = back or waiting for a reply · dotted = reference</p></aside>
+    <div class="canvas"><div class="stage" id="stage"><svg class="edges" id="edges" aria-hidden="true"></svg><div class="cols" id="cols"></div><svg class="edges labels" id="labels" aria-hidden="true"></svg></div></div>
+  </div>
+  <section class="oos" id="oos" hidden><h2>Out of scope</h2><ul id="oosList"></ul></section>
+  <div class="list" id="list" hidden></div>
+</div>
+<script>
+"use strict";
+const STATUS = {
+  done: { label: "done", c: "--done", bg: "--donebg" },
+  active: { label: "active", c: "--active", bg: "--activebg" },
+  blocked: { label: "blocked", c: "--blocked", bg: "--blockedbg" },
+  todo: { label: "todo", c: "--todo", bg: "--todobg" },
+  info: { label: "info", c: "--info", bg: "--infobg" },
+};
+const TIER = { runtime: "🟢 runtime", compile: "🟡 compile", static: "🟠 static", none: "⚪ none" };
+const POLL_MS = 2500;
+const svgNS = "http://www.w3.org/2000/svg";
+const token = new URLSearchParams(location.search).get("t") || "";
+const withToken = (path) => path + "?t=" + encodeURIComponent(token);
+const listMode = location.pathname.replace(/\/+$/, "") === "/board";
+const $ = (id) => document.getElementById(id);
+
+/** Build an element; text is always textContent (board data is untrusted). */
+function h(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  for (const k in attrs || {}) {
+    if (k === "text") e.textContent = attrs[k];
+    else if (k === "style") for (const s in attrs.style) e.style.setProperty(s, attrs.style[s]);
+    else e.setAttribute(k, attrs[k]);
+  }
+  for (const c of children) if (c) e.append(c);
+  return e;
+}
+function s(tag, attrs, parent) {
+  const e = document.createElementNS(svgNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.append(e);
+  return e;
+}
+const statusOf = (k) => STATUS[k] || STATUS.info;
+const pill = (k) => { const st = statusOf(k); return h("span", { class: "pill", text: st.label, style: { color: `var(${st.c})`, background: `var(${st.bg})` } }); };
+const fmtTime = (ms) => new Date(ms).toLocaleString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", day: "numeric", month: "short" });
+
+let board = null;
+let lastText = "";
+let selected = null;
+const hidden = new Set();
+
+function setLive(ok, text) {
+  $("live").classList.toggle("off", !ok);
+  $("liveText").textContent = text;
+}
+
+function render() {
+  const b = board;
+  document.title = b.title;
+  $("title").textContent = b.title;
+  $("subtitle").textContent = b.subtitle || "";
+  $("updated").textContent = `${b.kind ? b.kind + " · " : ""}updated ${fmtTime(b.updatedAt)}${b.updatedBy ? " by " + b.updatedBy : ""}`;
+  const banner = $("banner");
+  banner.hidden = !b.banner;
+  if (b.banner) {
+    const st = statusOf(b.banner.status);
+    banner.textContent = b.banner.text;
+    banner.style.color = `var(${st.c})`;
+    banner.style.background = `var(${st.bg})`;
+  }
+  $("kpis").replaceChildren(...(b.kpis || []).map((k) => {
+    const st = k.status ? statusOf(k.status) : null;
+    return h("div", { class: "num", style: st ? { "border-left-color": `var(${st.c})` } : {} },
+      h("b", { text: k.value, style: st ? { color: `var(${st.c})` } : {} }), h("span", { text: k.label }), k.hint ? h("small", { text: k.hint }) : null);
+  }));
+  const cards = b.columns.flatMap((c) => c.cards);
+  $("legend").replaceChildren(...Object.keys(STATUS).map((k) => {
+    const st = STATUS[k];
+    const n = cards.filter((c) => c.status === k).length;
+    const chip = h("button", { class: "chip", type: "button", "aria-pressed": String(!hidden.has(k)) },
+      h("span", { class: "dot", style: { background: `var(${st.c})` } }), `${st.label} (${n})`);
+    chip.addEventListener("click", () => { hidden.has(k) ? hidden.delete(k) : hidden.add(k); render(); });
+    return chip;
+  }), lineLegend());
+  $("cols").replaceChildren(...b.columns.map((col) => h("section", { class: "col" },
+    h("h2", {}, col.title, h("span", { class: "count", text: String(col.cards.length) })),
+    ...(col.cards.length ? col.cards.map(cardEl) : [h("div", { class: "tag", text: "empty" })]))));
+  const oos = b.outOfScope || [];
+  $("oos").hidden = !oos.length;
+  $("oosList").replaceChildren(...oos.map((t) => h("li", { text: t })));
+  if (selected && !cards.some((c) => c.id === selected)) selected = null;
+  showDetails();
+  requestAnimationFrame(drawEdges);
+}
+
+function lineLegend() {
+  const box = h("span", { class: "lines" });
+  for (const [cls, label] of [["", "flow / delivered"], ["dashed", "back / waiting"], ["dotted", "reference"]]) {
+    const svg = s("svg", { width: 34, height: 10 });
+    s("path", { d: "M2,5 L32,5", class: "edge " + cls }, svg);
+    box.append(h("span", {}, svg, " " + label));
+  }
+  return box;
+}
+
+function cardEl(c) {
+  const st = statusOf(c.status);
+  const el = h("button", {
+    class: "card" + (hidden.has(c.status) ? " dim" : "") + (selected === c.id ? " sel" : ""),
+    type: "button", "data-id": c.id, "aria-label": `${c.title} — ${st.label}`,
+    style: { "border-color": `var(${st.c})`, background: `var(${st.bg})` },
+  },
+    h("span", { class: "t", text: c.title }),
+    c.body ? h("span", { class: "b", text: c.body }) : null,
+    h("span", { class: "row" }, pill(c.status), c.tier ? h("span", { class: "tag", text: TIER[c.tier] || c.tier }) : null,
+      ...(c.tags || []).map((t) => h("span", { class: "tag", text: t }))));
+  el.addEventListener("click", () => { selected = selected === c.id ? null : c.id; render(); });
+  return el;
+}
+
+function showDetails() {
+  const side = $("side");
+  const c = selected && board.columns.flatMap((col) => col.cards.map((card) => ({ ...card, column: col.title }))).find((x) => x.id === selected);
+  if (!c) {
+    side.replaceChildren(h("h2", { text: "Select a card" }), h("p", { class: "hint", text: "Solid line = flow / delivered · dashed = back or waiting for a reply · dotted = reference" }));
+    return;
+  }
+  const title = (id) => board.columns.flatMap((col) => col.cards).find((x) => x.id === id)?.title || id;
+  const ins = board.edges.filter((e) => e.to === c.id).map((e) => `← ${title(e.from)}${e.label ? " (" + e.label + ")" : ""}`);
+  const outs = board.edges.filter((e) => e.from === c.id).map((e) => `→ ${title(e.to)}${e.label ? " (" + e.label + ")" : ""}`);
+  const rows = [["column", c.column], ["status", null], ["proof", c.tier ? TIER[c.tier] : ""], ["details", c.body || ""], ["tags", (c.tags || []).join(", ")], ["links", [...ins, ...outs].join("\n")]];
+  const dl = h("dl");
+  for (const [k, v] of rows) {
+    if (v === "") continue;
+    dl.append(h("dt", { text: k }), v === null ? h("dd", {}, pill(c.status)) : h("dd", { text: v }));
+  }
+  side.replaceChildren(h("h2", { text: c.title }), dl);
+}
+
+/** Connectors between cards, drawn in the stage's coordinates (scrolls with the columns). */
+function drawEdges() {
+  const svg = $("edges");
+  const stage = $("stage");
+  svg.replaceChildren();
+  // lines go under the cards, labels over them (a label may be wider than the gap between columns)
+  const labels = $("labels");
+  labels.replaceChildren();
+  if (!board) return;
+  const box = stage.getBoundingClientRect();
+  svg.setAttribute("width", stage.scrollWidth);
+  svg.setAttribute("height", stage.scrollHeight);
+  labels.setAttribute("width", stage.scrollWidth);
+  labels.setAttribute("height", stage.scrollHeight);
+  const color = getComputedStyle(document.documentElement).getPropertyValue("--edge").trim();
+  const defs = s("defs", {}, svg);
+  const marker = s("marker", { id: "arr", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, defs);
+  s("path", { d: "M0,0 L10,5 L0,10 z", fill: color }, marker);
+  const rectOf = (id) => {
+    const el = stage.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.left - box.left, y: r.top - box.top, w: r.width, h: r.height, dim: el.classList.contains("dim") };
+  };
+  const pairs = new Set(board.edges.map((e) => e.from + "\u0000" + e.to));
+  for (const e of board.edges) {
+    const a = rectOf(e.from), b = rectOf(e.to);
+    if (!a || !b) continue;
+    // A↔B both drawn: shift each direction off the centre line so lines and labels don't overlap.
+    const shift = pairs.has(e.to + "\u0000" + e.from) ? (e.from < e.to ? -1 : 1) * Math.min(a.h, b.h) * 0.22 : 0;
+    const acx = a.x + a.w / 2, bcx = b.x + b.w / 2;
+    let d, mx, my;
+    if (Math.abs(acx - bcx) > (a.w + b.w) / 4) {
+      // different columns: side to side
+      const [x1, x2] = bcx > acx ? [a.x + a.w, b.x] : [a.x, b.x + b.w];
+      const y1 = a.y + a.h / 2 + shift, y2 = b.y + b.h / 2 + shift, m = (x1 + x2) / 2;
+      d = `M${x1},${y1} C${m},${y1} ${m},${y2} ${x2},${y2}`;
+      mx = m; my = (y1 + y2) / 2;
+    } else {
+      // same column (or stacked on a phone): loop out to the right
+      const down = b.y > a.y;
+      const y1 = down ? a.y + a.h * 0.7 : a.y + a.h * 0.3, y2 = down ? b.y + b.h * 0.3 : b.y + b.h * 0.7;
+      // longer jumps bulge further so nested loops stay apart
+      const x = Math.max(a.x + a.w, b.x + b.w), bulge = x + 18 + Math.min(26, Math.abs(y2 - y1) / 14) + Math.abs(shift);
+      d = `M${x},${y1} C${bulge},${y1} ${bulge},${y2} ${x},${y2}`;
+      mx = bulge - 6; my = (y1 + y2) / 2;
+    }
+    s("path", { d, class: `edge ${e.style || "solid"}${a.dim || b.dim ? " dim" : ""}`, "marker-end": "url(#arr)" }, svg);
+    if (e.label) {
+      const t = s("text", { x: mx, y: my + (shift > 0 ? 13 : -4), "text-anchor": "middle", class: "elabel" });
+      t.textContent = e.label;
+      labels.append(t);
+      const bb = t.getBBox();
+      labels.insertBefore(s("rect", { x: bb.x - 3, y: bb.y - 1, width: bb.width + 6, height: bb.height + 2, rx: 4, class: "elabel-bg" }), t);
+    }
+  }
+}
+
+function renderList(boards) {
+  document.title = "Boards";
+  $("title").textContent = "Boards";
+  $("subtitle").textContent = "every board of this project · generated boards are always fresh";
+  $("boardArea").hidden = true;
+  $("allBoards").hidden = true;
+  const list = $("list");
+  list.hidden = false;
+  const SOURCE = { generated: "generated by the harness", file: "from a plan file", agent: "written by an agent" };
+  list.replaceChildren(...(boards.length ? boards.map((b) => {
+    const a = h("a", {},
+      h("b", {}, b.title, h("em", { class: "kind", text: b.kind || (b.source === "generated" ? "team" : "custom") })),
+      h("span", { text: `${b.name} · ${SOURCE[b.source] || b.source} · updated ${fmtTime(b.updatedAt)}${b.updatedBy ? " by " + b.updatedBy : ""}` }));
+    a.href = withToken("/board/" + encodeURIComponent(b.name));
+    return a;
+  }) : [h("p", { class: "empty", text: "no boards yet — agents write them with update_board; plan.md becomes the plan board" })]));
+}
+
+async function poll() {
+  const path = listMode ? "/board.json" : location.pathname.replace(/\/+$/, "") + ".json";
+  try {
+    const res = await fetch(withToken(path), { cache: "no-store" });
+    if (res.status === 401) return setLive(false, "not allowed — reopen with Ctrl-b B or `crewmux board`");
+    if (res.status === 404) {
+      $("title").textContent = "No such board yet";
+      $("subtitle").textContent = "an agent creates it with the update_board tool; this page picks it up automatically";
+      return setLive(true, "waiting for the board");
+    }
+    if (!res.ok) return setLive(false, `harness answered ${res.status}`);
+    const text = await res.text();
+    setLive(true, "live");
+    if (text === lastText) return;
+    lastText = text;
+    if (listMode) return renderList(JSON.parse(text).boards);
+    board = JSON.parse(text);
+    render();
+  } catch {
+    setLive(false, "harness not reachable — is crewmux running?");
+  }
+}
+
+if (typeof ResizeObserver === "function") new ResizeObserver(() => drawEdges()).observe($("stage"));
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawEdges);
+const snapshot = document.getElementById("board-snapshot");
+if (snapshot) {
+  // Exported file: the data is embedded (JSON, parsed — never evaluated); nothing is fetched.
+  const data = JSON.parse(snapshot.textContent);
+  board = data.board;
+  $("allBoards").hidden = true;
+  $("live").classList.add("snap");
+  $("liveText").textContent = `snapshot ${fmtTime(data.exportedAt)}`;
+  render();
+} else {
+  $("allBoards").href = withToken("/board");
+  poll();
+  setInterval(poll, POLL_MS);
+}
+</script>
+</body>
+</html>

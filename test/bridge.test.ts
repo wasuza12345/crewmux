@@ -5,12 +5,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { HarnessMcpServer } from "../src/bridge/mcp-server.js";
-import { ToolError, type CallerIdentity } from "../src/bridge/tools.js";
+import { ToolError, type BoardAccess, type CallerIdentity } from "../src/bridge/tools.js";
 import { EventBus } from "../src/core/event-bus.js";
 import { PathPolicy } from "../src/core/policy-engine.js";
 import { SessionRegistry } from "../src/core/session-registry.js";
 import { PolicyConfig } from "../src/config/schema.js";
-import type { HarnessEvent } from "../src/protocol/index.js";
+import type { Board, HarnessEvent } from "../src/protocol/index.js";
 
 let server: HarnessMcpServer;
 let compactCalls: { by: string; target: string; focus: string }[];
@@ -18,6 +18,9 @@ let sessions: SessionRegistry;
 let events: HarnessEvent[];
 let agentDir: string;
 let worktree: string;
+let stored: Map<string, Board>;
+const VIEW_TOKEN = "view-token-for-tests";
+const NOW = 1_758_000_000_000;
 
 const addSession = (id: string, role: string, agentId: string) =>
   sessions.add({ id, runId: "r_1", role, agentId, kind: "custom", cwd: worktree, window: `@${id}`, pane: `%${id}`, status: "running" });
@@ -46,7 +49,17 @@ beforeEach(async () => {
   addSession("s_planner", "planner", "claude");
   addSession("s_coder", "coder", "codex");
   compactCalls = [];
+  stored = new Map();
+  // In-memory stand-in for the runtime's board storage (the interface bridge is given).
+  const boards: BoardAccess = {
+    viewToken: VIEW_TOKEN,
+    page: () => "<!doctype html><title>board</title>",
+    get: (name) => (name === "team" ? { name: "team", updatedAt: NOW, title: "Team", kpis: [], columns: [{ id: "c", title: "c", cards: [] }], edges: [] } : stored.get(name)),
+    list: () => [...stored.values()].map((b) => ({ name: b.name, title: b.title, source: "agent" as const, updatedAt: b.updatedAt })),
+    put: (b) => void stored.set(b.name, b),
+  };
   server = new HarnessMcpServer({
+    boards, now: () => NOW,
     bus, sessions, policy: new PathPolicy(PolicyConfig.parse({ paths: { deny: ["*.env"] } })), agentDir,
     usage: (role) => (role === "coder" ? { tokens: 180000, window: 258400 } : undefined),
     compact: async (by, target, focus) => {
@@ -64,10 +77,10 @@ describe("harness MCP bridge", () => {
     expect(res.status).toBe(401);
   });
 
-  it("exposes the 7 harness tools", async () => {
+  it("exposes the 8 harness tools", async () => {
     const client = await connect(server.issueToken(identity("s_planner", "planner", "claude")));
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(["ask_user", "compact", "guide", "list_agents", "report_artifact", "send_message", "submit_review"]);
+    expect(names).toEqual(["ask_user", "compact", "guide", "list_agents", "report_artifact", "send_message", "submit_review", "update_board"]);
     await client.close();
   });
 
@@ -138,6 +151,41 @@ describe("harness MCP bridge", () => {
     const r = JSON.parse((await call(client, "guide", { topic: "bypass permissions" })).text);
     expect(r.found).toBeGreaterThan(0);
     expect(r.sections.map((s: { text: string }) => s.text).join("\n")).toContain("--dangerously-skip-permissions");
+    const boards = JSON.parse((await call(client, "guide", { topic: "board update_board" })).text);
+    expect(boards.sections.map((s: { text: string }) => s.text).join("\n")).toContain('"style": "dashed"');
+    await client.close();
+  });
+
+  it("guide: finds the layout recipe of every board kind (what the preamble points agents to)", async () => {
+    const client = await connect(server.issueToken(identity("s_planner", "planner", "claude")));
+    const expected: Record<string, RegExp> = {
+      plan: /plan\.md/, release: /Checks · Tests · Docs · Ship/, review: /BLOCKER · MAJOR · MINOR/,
+      debug: /Symptom · Hypotheses · Evidence · Fix/, handoff: /Done · In progress · Next · Open questions · Files/,
+    };
+    for (const [kind, layout] of Object.entries(expected)) {
+      const r = JSON.parse((await call(client, "guide", { topic: `board ${kind}` })).text);
+      const recipe = (r.sections as { title: string; text: string }[]).find((s) => s.title.startsWith(`Board recipe: ${kind}`));
+      expect(recipe, `${kind}: got ${r.sections.map((s: { title: string }) => s.title).join(" | ")}`).toBeDefined();
+      expect(recipe!.text, kind).toMatch(layout);
+    }
+    await client.close();
+  });
+
+  it("update_board: kind is stored; a release board must say GO or NO-GO", async () => {
+    const client = await connect(server.issueToken(identity("s_planner", "planner", "claude")));
+    const noBanner = await call(client, "update_board", { name: "release-1", board: { ...plan, kind: "release", banner: undefined } });
+    expect(noBanner.isError).toBe(true);
+    expect(noBanner.text).toMatch(/must start with "GO" or "NO-GO"/);
+    const vague = await call(client, "update_board", { name: "release-1", board: { ...plan, kind: "release", banner: { text: "GOOD so far", status: "active" } } });
+    expect(vague.isError).toBe(true);
+    const badKind = await call(client, "update_board", { name: "release-1", board: { ...plan, kind: "party" } });
+    expect(badKind.isError).toBe(true);
+    expect(stored.size).toBe(0);
+    for (const text of ["NO-GO — e2e red", "GO"]) {
+      const ok = await call(client, "update_board", { name: "release-1", board: { ...plan, kind: "release", banner: { text, status: "done" } } });
+      expect(ok.isError, text).toBe(false);
+    }
+    expect(stored.get("release-1")).toMatchObject({ kind: "release", banner: { text: "GO" } });
     await client.close();
   });
 
@@ -167,5 +215,91 @@ describe("harness MCP bridge", () => {
     const token = server.issueToken(identity("s_planner", "planner", "claude"));
     server.revokeToken(token);
     await expect(connect(token)).rejects.toThrow();
+  });
+
+  const plan = {
+    title: "Release plan",
+    banner: { text: "blocked on review", status: "blocked" },
+    kpis: [{ label: "tests", value: "13/13", status: "done" }],
+    columns: [{ id: "build", title: "Build", cards: [
+      { id: "a", title: "schema", status: "done", tier: "runtime" },
+      { id: "b", title: "template", status: "active", tags: ["ui"] },
+    ] }],
+    edges: [{ from: "a", to: "b", style: "dashed" }],
+    outOfScope: ["deploy"],
+  };
+
+  it("update_board: saves the board; updatedBy comes from the token, updatedAt from the harness clock", async () => {
+    const client = await connect(server.issueToken(identity("s_planner", "planner", "claude")));
+    // an agent trying to set the author/time itself is ignored — those fields are not part of the input
+    const r = await call(client, "update_board", { name: "plan", board: { ...plan, updatedBy: "coder", updatedAt: 1 } });
+    expect(r.isError).toBe(false);
+    expect(JSON.parse(r.text)).toMatchObject({ name: "plan", status: "saved" });
+    expect(stored.get("plan")).toMatchObject({ name: "plan", updatedBy: "planner", updatedAt: NOW, title: "Release plan" });
+    expect(stored.get("plan")?.columns[0]?.cards[1]).toEqual({ id: "b", title: "template", status: "active", tags: ["ui"] });
+    expect(events.some((e) => e.type === "board.updated" && e.name === "plan" && e.by === "planner")).toBe(true);
+    await client.close();
+  });
+
+  it("update_board: rejects bad shapes with a message the agent can act on, and the reserved team board", async () => {
+    const client = await connect(server.issueToken(identity("s_planner", "planner", "claude")));
+    const badStatus = await call(client, "update_board", { name: "plan", board: { ...plan, columns: [{ id: "x", title: "X", cards: [{ id: "c", title: "t", status: "finished" }] }], edges: [] } });
+    expect(badStatus.isError).toBe(true);
+    expect(badStatus.text).toMatch(/status/);
+    const badEdge = await call(client, "update_board", { name: "plan", board: { ...plan, edges: [{ from: "a", to: "ghost" }] } });
+    expect(badEdge.isError).toBe(true);
+    expect(badEdge.text).toMatch(/no card with id "ghost"/);
+    const badName = await call(client, "update_board", { name: "../etc", board: plan });
+    expect(badName.isError).toBe(true);
+    expect(badName.text).toMatch(/lowercase/);
+    const team = await call(client, "update_board", { name: "team", board: plan });
+    expect(team.isError).toBe(true);
+    expect(team.text).toMatch(/generated by the harness/);
+    expect(stored.size).toBe(0);
+    expect(events.some((e) => e.type === "board.updated")).toBe(false);
+    await client.close();
+  });
+
+  describe("board pages over HTTP", () => {
+    const origin = () => new URL(server.url).origin;
+    const get = (path: string) => fetch(`${origin()}${path}`);
+
+    it("listens on 127.0.0.1 only", () => {
+      expect(new URL(server.url).hostname).toBe("127.0.0.1");
+    });
+
+    it("serves page, board data and list with the view token", async () => {
+      stored.set("plan", { name: "plan", updatedAt: NOW, title: "Release plan", kpis: [], columns: [{ id: "c", title: "c", cards: [] }], edges: [] });
+      const page = await get(`/board/team?t=${VIEW_TOKEN}`);
+      expect(page.status).toBe(200);
+      expect(page.headers.get("content-type")).toMatch(/text\/html/);
+      expect(page.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
+      const team = await get(`/board/team.json?t=${VIEW_TOKEN}`);
+      expect(team.status).toBe(200);
+      expect((await team.json()).name).toBe("team");
+      const data = await (await get(`/board/plan.json?t=${VIEW_TOKEN}`)).json();
+      expect(data.title).toBe("Release plan");
+      const list = await get(`/board.json?t=${VIEW_TOKEN}`);
+      expect((await list.json()).boards.map((b: { name: string }) => b.name)).toEqual(["plan"]);
+      expect((await get(`/board?t=${VIEW_TOKEN}`)).status).toBe(200);
+    });
+
+    it("401 without or with a wrong token — the MCP bearer does not count", async () => {
+      for (const path of ["/board/team", "/board/team.json", "/board", "/board.json", "/board/team.json?t=nope", `/board/team.json?t=${VIEW_TOKEN}x`]) {
+        expect((await get(path)).status, path).toBe(401);
+      }
+      const mcpToken = server.issueToken(identity("s_planner", "planner", "claude"));
+      expect((await get(`/board/team.json?t=${mcpToken}`)).status).toBe(401);
+      const withBearer = await fetch(`${origin()}/board/team.json`, { headers: { Authorization: `Bearer ${mcpToken}` } });
+      expect(withBearer.status).toBe(401);
+    });
+
+    it("404 for unknown or malformed board names; read-only", async () => {
+      expect((await get(`/board/nope.json?t=${VIEW_TOKEN}`)).status).toBe(404);
+      expect((await get(`/board/..%2Fprivate.json?t=${VIEW_TOKEN}`)).status).toBe(404);
+      expect((await get(`/board/UPPER.json?t=${VIEW_TOKEN}`)).status).toBe(404);
+      expect((await fetch(`${origin()}/board/team.json?t=${VIEW_TOKEN}`, { method: "POST", body: "{}" })).status).toBe(405);
+    });
   });
 });

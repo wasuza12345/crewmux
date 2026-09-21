@@ -4,6 +4,8 @@ import { dirname, join } from "node:path";
 import { loadConfig, roleColor } from "../config/load.js";
 import { EventStore } from "../persistence/events.js";
 import { openDbReadonly } from "../persistence/sqlite.js";
+import { readBoardView } from "../persistence/boards.js";
+import { boardListUrl } from "../protocol/index.js";
 import { initialState, reduce, renderPanel, type PanelState } from "./panel.js";
 
 export interface PanelRunOptions {
@@ -31,9 +33,16 @@ export async function runPanel(opts: PanelRunOptions): Promise<void> {
   })));
   let seq = 0;
   let dirty = true;
+  let board: string | undefined;
+  let boardCheckedAt = 0;
+  const BOARD_RECHECK_MS = 2000;
 
   const draw = () => {
-    const lines = renderPanel(state, { width: out.columns || 32, height: out.rows || 24, mode: opts.mode, ...(opts.viewer ? { viewer: opts.viewer } : {}) });
+    const lines = renderPanel(state, {
+      width: out.columns || 32, height: out.rows || 24, mode: opts.mode,
+      ...(opts.viewer ? { viewer: opts.viewer } : {}),
+      ...(board ? { board } : {}),
+    });
     out.write(`\x1b[H\x1b[2J${lines.join("\r\n")}`);
     dirty = false;
   };
@@ -59,6 +68,13 @@ export async function runPanel(opts: PanelRunOptions): Promise<void> {
       state = reduce(state, row.event);
       seq = row.seq;
       dirty = true;
+    }
+    if (Date.now() - boardCheckedAt > BOARD_RECHECK_MS) {
+      // The harness (re)writes where boards are served on every start; follow it.
+      boardCheckedAt = Date.now();
+      const view = readBoardView(opts.agentDir);
+      const next = view ? boardListUrl(view) : undefined;
+      if (next !== board) { board = next; dirty = true; }
     }
     if (dirty) draw();
     await sleep(opts.pollMs ?? 300);

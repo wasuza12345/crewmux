@@ -63,5 +63,8 @@ describe("harness preamble", () => {
     expect(p).toContain(AGENT_GUIDE);
     expect(p).toContain("guide(topic)");
     expect(p).toContain("crewmux open <role>");
+    // boards: one line, pointing at the per-kind recipes
+    expect(p.split("\n").filter((l) => l.includes("update_board"))).toHaveLength(1);
+    expect(p).toContain('guide("board <kind>")');
   });
 });

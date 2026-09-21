@@ -143,6 +143,7 @@ export interface RenderOptions {
   mode: "side" | "popup";
   viewer?: string; // role whose window this panel sits in
   ansi?: boolean; // false in tests
+  board?: string; // URL of the running harness's board list page (with its view token)
 }
 
 export function renderPanel(state: PanelState, opts: RenderOptions): string[] {
@@ -173,10 +174,12 @@ export function renderPanel(state: PanelState, opts: RenderOptions): string[] {
     head.push([{ text: "  C-b a → answer in its window", dim: true }]);
   }
 
+  // Side: one short hint (a truncated URL is useless); popup: the full list URL, wrapped, so it can be copied.
+  const boardLine: Line[] = opts.board ? [[{ text: "C-b B", color: "#3fb68b" }, { text: " board · URL: C-b m", dim: true }]] : [];
   const footer: Line[] = mode === "side"
-    ? [[{ text: "M-1..9", color: "#3fb68b" }, { text: " agent  ", dim: true }, { text: "C-b m", color: "#3fb68b" }, { text: " all", dim: true }],
+    ? [...boardLine, [{ text: "M-1..9", color: "#3fb68b" }, { text: " agent  ", dim: true }, { text: "C-b m", color: "#3fb68b" }, { text: " all", dim: true }],
        [{ text: "C-b a", color: "#3fb68b" }, { text: " answer ", dim: true }, { text: "q", color: "#3fb68b" }, { text: " here: leave", dim: true }]]
-    : [[{ text: "q / Esc", color: "#3fb68b" }, { text: " close", dim: true }]];
+    : [...(opts.board ? wrap(`boards: ${opts.board}`, width).map((l): Line => [{ text: l, dim: true }]) : []), [{ text: "q / Esc", color: "#3fb68b" }, { text: " close", dim: true }]];
 
   const room = Math.max(0, height - head.length - footer.length - 2);
   const msgLines: Line[] = [];

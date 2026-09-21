@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildRolePrompt, loadConfig, roleColor, type LoadedConfig } from "../config/load.js";
 import { EventBus } from "../core/event-bus.js";
@@ -7,17 +8,22 @@ import { SessionRegistry } from "../core/session-registry.js";
 import { HarnessMcpServer } from "../bridge/mcp-server.js";
 import { launcherFor } from "../agents/launchers/index.js";
 import { EventStore } from "../persistence/events.js";
+import { removeBoardView, writeBoardView } from "../persistence/boards.js";
+import { ProjectBoards } from "./project-boards.js";
+import { BOARD_PAGE } from "./board-export.js";
 import { openDb, type Db } from "../persistence/sqlite.js";
 import { createWorktree } from "../workspace/worktree.js";
 import * as tmux from "../terminal/tmux.js";
 import { PANEL_COLUMNS } from "../terminal/chrome.js";
-import { newId, USER, type AgentEnvelope, type AgentSessionInfo, type ArtifactRef, type HarnessEvent } from "../protocol/index.js";
+import { BoardName, boardUrl, newId, TEAM_BOARD, USER, type AgentEnvelope, type AgentSessionInfo, type ArtifactRef, type Board, type HarnessEvent } from "../protocol/index.js";
 import { formatDelivery, harnessPreamble } from "./prompt.js";
 import { findCodexSession, resolveResume } from "./resume.js";
 import { prepareVendor } from "./vendor-setup.js";
 import { contextUsage, type ContextUsage } from "./usage.js";
 import { compactCommand } from "../agents/presets.js";
-import { ToolError } from "../bridge/tools.js";
+import { ToolError, type BoardAccess } from "../bridge/tools.js";
+import { teamBoard } from "./team-board.js";
+
 
 export interface HarnessOptions {
   tmuxSession: string; // must already exist — `crewmux up` creates it with the harness in window 0
@@ -48,8 +54,15 @@ export class Harness {
   private usageTimer?: NodeJS.Timeout;
   private readonly usage = new Map<string, ContextUsage>(); // role → latest known context size
   private readonly lastCompact = new Map<string, number>(); // role → ms of the last compaction
+  /** Browser credential for the board pages; one per run, never logged (written 0600 to state/board-view.json). */
+  private readonly boardToken = randomBytes(32).toString("base64url");
+  private readonly boards: ProjectBoards;
 
   constructor(private config: LoadedConfig, private readonly opts: HarnessOptions) {
+    this.boards = new ProjectBoards({
+      root: config.root, agentDir: config.dir, team: () => this.teamBoard(), warn: (what, err) => this.warn(what, err),
+      ...(config.project.boards.plan ? { planPath: config.project.boards.plan } : {}),
+    });
     const onCall = opts.debug ? (c: { role: string }, method: string, detail: string) => opts.log?.(`  mcp ${c.role} ${method} ${detail}`.trimEnd()) : undefined;
     this.mcp = new HarnessMcpServer({
       bus: this.bus,
@@ -58,6 +71,7 @@ export class Harness {
       agentDir: config.dir,
       usage: (role) => this.usageOf(role),
       compact: (by, target, focus) => this.compact(target, { by, focus }),
+      boards: this.boardAccess(),
     }, onCall);
   }
 
@@ -67,6 +81,7 @@ export class Harness {
     this.bus.addSink((e) => store.append(e));
     this.bus.subscribe((e) => this.onEvent(e));
     await this.mcp.start();
+    writeBoardView(this.config.dir, { runId: this.runId, origin: this.mcp.origin, token: this.boardToken });
     this.bus.publish({ type: "run.status", runId: this.runId, status: "started", project: this.config.project.project });
     this.watcher = setInterval(() => void this.reapExited(), this.opts.watchIntervalMs ?? 2000);
     this.usageTimer = setInterval(() => this.pollUsage(), this.opts.usageIntervalMs ?? 20_000);
@@ -159,6 +174,35 @@ export class Harness {
     return this.launch(role, { fresh, reload: true });
   }
 
+  /** Board URL with the view token, for `crewmux board` / Ctrl-b B. */
+  boardUrl(name: string = TEAM_BOARD): string {
+    if (!BoardName.safeParse(name).success) throw new Error(`"${name}" is not a board name (lowercase letters, digits and "-")`);
+    return boardUrl({ origin: this.mcp.origin, token: this.boardToken }, name);
+  }
+
+  /** The generated team board, from this run's events and roles.yaml as it is now. */
+  teamBoard(): Board {
+    const roles = this.status().map(({ role, agent, status }) => ({ role, agent, status }));
+    return teamBoard({ project: this.config.project.project, roles, events: this.store?.replay(this.runId) ?? [], now: Date.now() });
+  }
+
+  /** A board's current data (team, plan or authored), for `crewmux board export`. */
+  board(name: string): Board {
+    const b = BoardName.safeParse(name).success ? this.boards.get(name) : undefined;
+    if (!b) throw new Error(`no board named "${name}" — \`crewmux board\` shows all boards`);
+    return b;
+  }
+
+  private boardAccess(): BoardAccess {
+    return {
+      viewToken: this.boardToken,
+      page: () => readFileSync(BOARD_PAGE, "utf8"),
+      get: (name) => this.boards.get(name),
+      put: (board) => this.boards.put(board),
+      list: () => this.boards.list(),
+    };
+  }
+
   /** Every role in roles.yaml (as it is on disk now) with its current status, for `crewmux status`. */
   status(): { role: string; agent: string; status: string; window?: string }[] {
     let roles = this.config.roles;
@@ -184,6 +228,7 @@ export class Harness {
     await Promise.all(this.deliveryQueues.values());
     this.bus.publish({ type: "run.status", runId: this.runId, status: "stopped", project: this.config.project.project });
     await this.mcp.stop();
+    removeBoardView(this.config.dir);
     this.db?.close();
   }
 
@@ -328,5 +373,6 @@ export function describe(e: HarnessEvent): string {
     case "artifact.created": return `${t}  ${e.artifact.role} shared ${e.artifact.kind} ${e.artifact.id}`;
     case "session.usage": return `${t}  ${e.role} context ${Math.round(e.tokens / 1000)}k${e.window ? ` (${Math.round((e.tokens / e.window) * 100)}%)` : ""}`;
     case "session.compact": return `${t}  ${e.role} compact ← ${e.by}${e.focus ? ` · keep: ${e.focus.slice(0, 60)}` : ""}`;
+    case "board.updated": return `${t}  ${e.by} updated board ${e.name}`;
   }
 }

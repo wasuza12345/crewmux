@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { handleBoardRequest } from "./board-http.js";
 import { createToolHandlers, TOOL_DESCRIPTIONS, TOOL_INPUTS, ToolError, type BridgeDeps, type CallerIdentity } from "./tools.js";
 
 export const MCP_SERVER_NAME = "harness";
@@ -15,6 +16,7 @@ const MAX_BODY_BYTES = 1_000_000;
  *                                                                        └─ tools.ts → EventBus/SessionRegistry
  *
  * Streamable HTTP, stateless, bound to 127.0.0.1 only. One token per agent session.
+ * The same server also serves the read-only board pages (/board…, see board-http.ts) to the browser.
  */
 export class HarnessMcpServer {
   private readonly callers = new Map<string, CallerIdentity>();
@@ -43,6 +45,11 @@ export class HarnessMcpServer {
     return this.baseUrl;
   }
 
+  /** http://127.0.0.1:<port> — where the board pages live. */
+  get origin(): string {
+    return new URL(this.url).origin;
+  }
+
   /** Call when an agent session starts; revoke when it ends. */
   issueToken(caller: CallerIdentity): string {
     const token = randomBytes(32).toString("base64url");
@@ -59,6 +66,7 @@ export class HarnessMcpServer {
       res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify({ error: message }));
     };
     try {
+      if (handleBoardRequest(req, res, this.deps.boards)) return;
       if (new URL(req.url ?? "/", "http://localhost").pathname !== "/mcp") return reply(404, "not found");
       if (req.method !== "POST") return reply(405, "stateless server: POST only");
 

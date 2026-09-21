@@ -10,7 +10,8 @@ Read it before editing anything in `.crewmux/`. The human-facing manual is `docs
   renders or parses your screen.
 - Some CLIs have built-in tools with the same names (Codex's `collaboration.send_message` / `list_agents`). They do NOT reach this team — use the tools of the MCP server named `harness` only. (crewmux disables Codex's built-in multi-agent tools for you.)
 - Agents talk **only** through the `harness` MCP server: `list_agents`, `send_message`,
-  `submit_review`, `report_artifact`, `ask_user`, and `guide` (this manual, searchable by topic).
+  `submit_review`, `report_artifact`, `ask_user`, `compact`, `update_board` (a web status board, §5.2)
+  and `guide` (this manual, searchable by topic).
   A message you send is pasted into the recipient's terminal, prefixed with `[harness] message <id> from "<role>"`.
 - When the human asks how to use or configure crewmux, call `guide(topic)` and walk them
   through the steps (or do them, if they asked you to). Do not send them off to read docs.
@@ -66,6 +67,7 @@ project: <name>           # A-Z a-z 0-9 _ - ; tmux session is crewmux-<project>
 baseBranch: main
 isolation: shared         # shared | worktree (one git worktree per role per run)
 delivery: { pasteDelayMs: 300 }
+boards: { plan: docs/plan.md }   # optional: the plan board's markdown file (§5.2); default plan.md
 ```
 
 ### policy.yaml
@@ -81,6 +83,8 @@ paths: { deny: ["*.env", "*.pem", ...] }   # only guards report_artifact, not yo
 | See roles and whether they run | `crewmux status` |
 | Start a role now (re-reads roles.yaml) | `crewmux open <role>` (`--fresh` = new conversation) |
 | Stop a role (resumable later) | `crewmux close <role>` |
+| Show the human a status board in the browser | MCP `update_board(name, board)`; the human opens it with `Ctrl-b B` or `crewmux board <name>` (§5.2) |
+| Save a board as one HTML file | `crewmux board export <name> [--out <file>]` |
 | Compact a role (save tokens) | MCP `compact(target?, focus?)`, or `crewmux compact <role> --focus "…"` |
 | Restart a role — yourself included (applies config, same conversation) | `crewmux restart <role>` — do it yourself, do not ask the human |
 | Apply changed flags/model/prompt to a running role | `crewmux restart <role>` (never `close && open` on your own role: `close` kills your shell first) |
@@ -210,6 +214,145 @@ cli:
 ```
 `usage` lets `list_agents` and the sidebar show the context size (last regex match, group 1). Without
 `compact.command` the agent simply cannot be compacted (a clear error says so).
+
+## 5.2 Boards (web status page)
+
+A board is a read-only web page per project that the human keeps open next to tmux: a banner,
+KPI tiles, columns of cards, connectors between cards and an "out of scope" list. It refreshes
+every 2.5 s. Write one with the MCP tool `update_board`; each call **replaces** the whole board.
+
+| Board | Written by | Opened with |
+|---|---|---|
+| `team` | the harness (generated: agents running/asking/stopped, context %, open questions, who messaged whom) | `Ctrl-b B`, `crewmux board` |
+| `plan` | generated from the project's plan markdown file (below) — unless you wrote a `plan` board yourself | `crewmux board plan` |
+| any other name (`release-1`, `review-pr-42`, …) | you, via `update_board` (layouts per `kind`: §5.3) | `crewmux board <name>`, or the "all boards" link on any board |
+
+The "all boards" page (`/board`) lists every board with its kind, where it comes from
+(generated / plan file / agent), when it was updated and by whom.
+
+```jsonc
+update_board({
+  "name": "plan",                       // lowercase, digits, "-"; "team" is reserved
+  "board": {
+    "title": "Auth refresh — plan",
+    "subtitle": "branch feat/refresh",   // optional
+    "banner": { "text": "blocked on review", "status": "blocked" },   // optional
+    "kpis": [{ "label": "tests", "value": "13/13", "status": "done", "hint": "vitest" }],
+    "columns": [
+      { "id": "build", "title": "Build", "cards": [
+        { "id": "schema", "title": "schema", "status": "done", "tier": "runtime", "body": "…", "tags": ["zod"] },
+        { "id": "ui", "title": "board page", "status": "active" } ] },
+      { "id": "verify", "title": "Verify", "cards": [ { "id": "e2e", "title": "e2e on tmux", "status": "todo" } ] }
+    ],
+    "edges": [{ "from": "schema", "to": "ui", "style": "solid" }, { "from": "ui", "to": "e2e", "style": "dashed", "label": "next" }],
+    "outOfScope": ["deploy to production"]
+  }
+})
+```
+
+- `status`: `done` · `active` · `blocked` · `todo` · `info`. `tier` (how a claim was proven):
+  `runtime` 🟢 ran and saw output · `compile` 🟡 · `static` 🟠 read only · `none` ⚪.
+- Edge `style`: `solid` = main flow · `dashed` = back / waiting · `dotted` = reference. `from`/`to` are card ids;
+  card ids must be unique on the board.
+- Limits: 12 columns, 50 cards per column, 200 cards total, 12 KPIs, 300 edges, card body 2000 chars.
+  Keep cards short — the page is for a glance; details belong in artifacts.
+- The harness sets `updatedAt` and `updatedBy` (your role). Files live in `.crewmux/state/boards/<name>.json` — do not edit them by hand.
+- The page is served on 127.0.0.1 only and needs the per-run view token in its URL, which
+  `crewmux board` prints. The token changes every time the harness starts.
+
+### Generated plan from plan.md
+
+The `plan` board is generated from a markdown file in the project and follows every save of the
+file (the page refreshes by itself). Which file: `config.yaml → boards: { plan: docs/plan.md }`
+(relative to the project root, must stay inside it), else the first of `plan.md`, `PLAN.md`,
+`.crewmux/plan.md` that exists. No file → no plan board.
+
+```markdown
+# Auth refresh                     ← board title
+Single-flight refresh for mobile.  ← subtitle (first paragraph under the title)
+
+## Build                           ← a column
+- [x] schema 🟢                    ← done, proof tier runtime
+- [~] refresh queue 🟡             ← active (in progress), tier compile
+  - retries with backoff           ← indented lines = card body
+- [!] waiting for API access       ← blocked
+- [ ] docs                         ← todo
+- a plain bullet                   ← info (a note, not counted as a task)
+
+## Out of scope                    ← not a column: the out-of-scope list
+- deploy to production
+```
+
+- Markers: `[x]` done · `[ ]` todo · `[~]` active · `[!]` blocked. Tiers: 🟢 runtime · 🟡 compile · 🟠 static · ⚪ none, anywhere on the item line.
+- KPIs are computed: done/total, in progress, blocked, todo; the banner lists blocked items, or says all done.
+- `###` headings, paragraphs and fenced code are ignored. Items before the first `##` go into a "Tasks" column.
+- **Authored wins**: if an agent writes a board named `plan` with `update_board`, that board is shown
+  instead of the file. To go back to the file, delete `.crewmux/state/boards/plan.json`.
+- Prefer editing the plan file: humans read it in git too, and the board stays in sync for free.
+
+### Export a board (snapshot file)
+
+`crewmux board export <name> [--out <file>]` writes one self-contained HTML file with the board's
+data embedded — no polling, no token, marked "snapshot <time>"; default path
+`.crewmux/boards/<name>-<yyyymmdd-hhmm>.html` (printed). Safe to attach to a PR or send to someone:
+it contains only the board. `team` needs the harness running; other boards are read from disk.
+
+## 5.3 Board recipes (`kind`)
+
+Set `"kind"` on the board and follow the layout for that kind, so every agent draws the same
+thing the same way and the human can read any board at a glance. Name the board after the work
+(`release-1-4`, `review-pr-42`, `debug-login-500`, `handoff-coder`). `custom` = anything else.
+Common to all: send the **whole** board every time, update it when a card changes state, put the
+proof tier on every claim (`runtime` only when you ran it and saw the output).
+
+### Board recipe: plan
+
+- When: you are asked for a plan, or a plan changes. Usually you do **not** need to write it:
+  keep `plan.md` in the project (§5.2) and the `plan` board is generated from it.
+- Write it with `update_board("plan", …)` only when the plan is not a file; the authored board then wins.
+- Columns = phases (`Phase 1 — schema`, …). Cards = tasks: `todo` → `active` → `done` / `blocked`.
+- KPIs: `done` = `3/8`, `blocked`. Banner only when something is blocked or everything is done.
+- Edges: `solid` = depends on / next. `outOfScope` = what this plan deliberately does not do.
+
+### Board recipe: release (GO / NO-GO)
+
+- When: before a deploy, a publish or a merge to the release branch; update after every check.
+- `"kind": "release"`, columns **Checks · Tests · Docs · Ship**.
+- Cards: one per gate (`typecheck`, `unit 106/106`, `e2e tmux`, `CHANGELOG`, `version bump`, `tag`),
+  `status` `done` / `blocked` / `todo`, and **always a `tier`**: a test you did not run is `none`, not `done`.
+- KPIs: `tests` (`106/106`), `blocked`, `proof` (e.g. `9/10 runtime`).
+- Banner (required, validated): text starts with `GO` or `NO-GO`, e.g.
+  `{ "text": "NO-GO — e2e red, CHANGELOG missing", "status": "blocked" }` or `{ "text": "GO — all gates green", "status": "done" }`.
+  `GO` only when no card is `blocked` or `todo`.
+- `outOfScope`: what this release does not include.
+
+### Board recipe: review (findings)
+
+- When: you reviewed a diff or PR (with `submit_review` to the author as well — the board is for the human).
+- `"kind": "review"`, columns **BLOCKER · MAJOR · MINOR** (+ optional **Fixed**).
+- Cards: one finding each; title = short claim, body = `file:line` + why + suggested fix,
+  `status` `blocked` for BLOCKER, `todo` for MAJOR/MINOR, `done` once fixed (move it to **Fixed**).
+  `tier` = how you know (`static` = read the code, `runtime` = reproduced it).
+- KPIs: counts per severity, `confidence` (`8/10`). Banner: `approve` / `changes requested`.
+- Edges: `dotted` from a finding to a related finding.
+
+### Board recipe: debug (symptom → fix)
+
+- When: a bug hunt that takes more than a couple of steps, so the human sees where you are.
+- `"kind": "debug"`, columns **Symptom · Hypotheses · Evidence · Fix**.
+- Cards: the symptom (`blocked` until fixed); each hypothesis (`active` while testing, `done` = confirmed,
+  `info` = ruled out, say so in the body); evidence = what you ran and saw (`tier: runtime`); the fix + its test.
+- Edges: `solid` hypothesis → evidence → fix; `dotted` for references (a log, a commit, a related issue).
+- Banner: current status in one line, e.g. `root cause found: token cache shared across schools`.
+
+### Board recipe: handoff (before compact or hand-over)
+
+- When: before you compact, stop, or hand the task to another role — so the next agent (or you after
+  compaction) and the human know exactly where things stand. Name it `handoff-<role>`.
+- `"kind": "handoff"`, columns **Done · In progress · Next · Open questions · Files**.
+- Cards: done items with their proof tier; in-progress with what is left; next steps in order;
+  questions for the human (`blocked`); files = one card per path with a one-line reason (no file contents).
+- Banner: one line for whoever picks it up. Put pending message ids in the body of the relevant card.
 
 ## 6. Rules
 

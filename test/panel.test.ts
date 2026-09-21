@@ -90,16 +90,16 @@ describe("tmux chrome", () => {
   it("sets everything globally — safe because each project has its own tmux server", () => {
     for (const c of cmds.filter((c) => c[0] === "set-option" || c[0] === "set-hook")) expect(c[1]).toBe("-g");
   });
-  it("binds Alt-1..9, C-b m popup, C-b n open, C-b X close, C-b a jump-to-asker", () => {
-    const binds = cmds.filter((c) => c[0] === "bind-key").map((c) => c.slice(1, 3).join(" "));
-    expect(binds).toEqual([...Array.from({ length: 9 }, (_, i) => `-n M-${i + 1}`), "m display-popup", "C-m display-popup", "n command-prompt", "C-n command-prompt", "X confirm-before", "R confirm-before", "C confirm-before", "a if-shell", "C-a if-shell"]);
+  it("binds Alt-1..9, C-b m popup, C-b n open, C-b X close, C-b B board, C-b a jump-to-asker", () => {
+    const binds = cmds.filter((c) => c[0] === "bind-key").map((c) => `${c[1]} ${c[2]!.split(" ")[0]}`);
+    expect(binds).toEqual([...Array.from({ length: 9 }, (_, i) => `-n M-${i + 1}`), "m display-popup", "C-m display-popup", "n command-prompt", "C-n command-prompt", "X confirm-before", "R confirm-before", "B run-shell", "C confirm-before", "a if-shell", "C-a if-shell"]);
   });
   it("refuses a project path that would break the shell quoting", () => {
     expect(() => chromeCommands({ cli: "node x", cwd: "/it's/here" })).toThrow(/must not contain/);
     expect(() => chromeCommands({ cli: "node x", cwd: "/a/$HOME" })).toThrow(/must not contain/);
   });
   it("open/close bindings run in the background (never block the client)", () => {
-    for (const key of ["n", "X"]) {
+    for (const key of ["n", "X", "B"]) {
       const cmd = cmds.find((c) => c[0] === "bind-key" && c[1] === key)!.at(-1)!;
       expect(cmd.startsWith("run-shell -b '")).toBe(true);
       expect(cmd).toContain('display-message -c "#{client_name}"');

@@ -16,6 +16,8 @@ export const HarnessEvent = z.discriminatedUnion("type", [
   z.object({ ...base, type: z.literal("session.usage"), role: z.string(), tokens: z.number(), window: z.number().optional() }),
   /** A compaction was typed into an agent's CLI. `by` = requesting role, or "user". */
   z.object({ ...base, type: z.literal("session.compact"), role: z.string(), by: z.string(), focus: z.string().optional() }),
+  /** An authored board was written (content lives in .crewmux/state/boards/<name>.json). `by` = writing role. */
+  z.object({ ...base, type: z.literal("board.updated"), name: z.string(), by: z.string() }),
 ]);
 export type HarnessEvent = z.infer<typeof HarnessEvent>;
 export type HarnessEventType = HarnessEvent["type"];
