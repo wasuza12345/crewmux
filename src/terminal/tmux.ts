@@ -101,6 +101,17 @@ export async function pasteAndSubmit(target: string, text: string, delayMs: numb
   await tmux("send-keys", "-t", target, "Enter");
 }
 
+/**
+ * Type a short command into a pane as real keystrokes (`send-keys -l`), never through a paste buffer:
+ * a CLI in bracketed-paste mode (Claude Code, Codex) treats pasted text as content, so a pasted
+ * "/compact" is answered as a message instead of running as a slash command.
+ */
+export async function sendCommand(target: string, text: string, delayMs: number): Promise<void> {
+  await tmux("send-keys", "-t", target, "-l", text);
+  await new Promise((r) => setTimeout(r, delayMs));
+  await tmux("send-keys", "-t", target, "Enter");
+}
+
 export async function capturePane(target: string): Promise<string> {
   return tmux("capture-pane", "-p", "-J", "-S", "-200", "-t", target);
 }

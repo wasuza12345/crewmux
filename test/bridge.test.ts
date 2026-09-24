@@ -14,6 +14,8 @@ import type { Board, HarnessEvent } from "../src/protocol/index.js";
 
 let server: HarnessMcpServer;
 let compactCalls: { by: string; target: string; focus: string }[];
+let usageOf: Map<string, { tokens: number; window?: number }>;
+let contextNotes: Map<string, string>;
 let sessions: SessionRegistry;
 let events: HarnessEvent[];
 let agentDir: string;
@@ -49,6 +51,8 @@ beforeEach(async () => {
   addSession("s_planner", "planner", "claude");
   addSession("s_coder", "coder", "codex");
   compactCalls = [];
+  usageOf = new Map([["coder", { tokens: 180000, window: 258400 }]]);
+  contextNotes = new Map();
   stored = new Map();
   // In-memory stand-in for the runtime's board storage (the interface bridge is given).
   const boards: BoardAccess = {
@@ -61,7 +65,8 @@ beforeEach(async () => {
   server = new HarnessMcpServer({
     boards, now: () => NOW,
     bus, sessions, policy: new PathPolicy(PolicyConfig.parse({ paths: { deny: ["*.env"] } })), agentDir,
-    usage: (role) => (role === "coder" ? { tokens: 180000, window: 258400 } : undefined),
+    usage: (role) => usageOf.get(role),
+    contextNote: (role) => contextNotes.get(role),
     compact: async (by, target, focus) => {
       if (target === "nobody") throw new ToolError(`no running agent with role "nobody"`);
       compactCalls.push({ by, target, focus });
@@ -194,6 +199,16 @@ describe("harness MCP bridge", () => {
     const r = JSON.parse((await call(client, "list_agents")).text);
     expect(r.yourContext).toBe("unknown");
     expect(r.peers[0].context).toBe("180000 tokens (70% of 258400)");
+    await client.close();
+  });
+
+  it("list_agents says unknown — never the pre-compaction number — and reports a compaction that did not take", async () => {
+    usageOf.delete("coder"); // what the harness does once a role is compacted: the old size is meaningless
+    contextNotes.set("coder", "the compaction requested at 14:31 did not take effect (context still 860603 tokens)");
+    const client = await connect(server.issueToken(identity("s_planner", "planner", "claude")));
+    const r = JSON.parse((await call(client, "list_agents")).text);
+    expect(r.peers[0].context).not.toContain("180000");
+    expect(r.peers[0].context).toBe("unknown · the compaction requested at 14:31 did not take effect (context still 860603 tokens)");
     await client.close();
   });
 

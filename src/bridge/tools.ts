@@ -42,6 +42,8 @@ export interface BridgeDeps {
   agentDir: string;
   /** Latest known context size of a role (runtime reads it from the CLI's session files). */
   usage?: (role: string) => { tokens: number; window?: number } | undefined;
+  /** Anything the agent must know about that size, e.g. a compaction that did not take effect. */
+  contextNote?: (role: string) => string | undefined;
   /** Type the CLI's compact command into a role's session. Throws ToolError when not allowed. */
   compact?: (by: string, target: string, focus: string) => Promise<void>;
   boards?: BoardAccess;
@@ -126,8 +128,9 @@ export function createToolHandlers(deps: BridgeDeps, caller: CallerIdentity) {
 
   const contextOf = (role: string) => {
     const u = deps.usage?.(role);
-    if (!u) return "unknown";
-    return u.window ? `${u.tokens} tokens (${Math.round((u.tokens / u.window) * 100)}% of ${u.window})` : `${u.tokens} tokens`;
+    const size = !u ? "unknown" : u.window ? `${u.tokens} tokens (${Math.round((u.tokens / u.window) * 100)}% of ${u.window})` : `${u.tokens} tokens`;
+    const note = deps.contextNote?.(role);
+    return note ? `${size} · ${note}` : size;
   };
 
   return {

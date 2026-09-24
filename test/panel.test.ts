@@ -80,6 +80,27 @@ describe("sidebar panel", () => {
     expect(text).toMatch(/planner\s+claude\s+312k⟳/);
   });
 
+  it("after a compaction the size is unknown until a newer reading — ⟳ alone, never the old number", () => {
+    let s = [session("planner", "running")].reduce(reduce, initialState([{ role: "planner", vendor: "claude", color: "#e3a857" }]));
+    s = reduce(s, ev({ type: "session.usage", role: "planner", tokens: 857743 }));
+    s = reduce(s, ev({ type: "session.compact", role: "planner", by: "coder" }));
+    s = reduce(s, ev({ type: "session.usage", role: "planner" })); // no tokens = unknown again
+    const compacted = renderPanel(s, { width: 32, height: 20, mode: "side", ansi: false }).join("\n");
+    expect(compacted).not.toContain("858k");
+    expect(compacted).toMatch(/planner\s+claude\s+⟳/);
+
+    s = reduce(s, ev({ type: "session.usage", role: "planner", tokens: 12000 })); // its next turn
+    expect(renderPanel(s, { width: 32, height: 20, mode: "side", ansi: false }).join("\n")).toMatch(/planner\s+claude\s+12k⟳/);
+  });
+
+  it("a compaction that never took effect drops the ⟳ instead of promising a smaller context", () => {
+    let s = [session("planner", "running")].reduce(reduce, initialState([{ role: "planner", vendor: "claude", color: "#e3a857" }]));
+    s = reduce(s, ev({ type: "session.usage", role: "planner", tokens: 860000 }));
+    s = reduce(s, ev({ type: "session.compact", role: "planner", by: "coder" }));
+    s = reduce(s, ev({ type: "session.compact.failed", role: "planner", waitedMs: 90_000, tokens: 860603 }));
+    expect(renderPanel(s, { width: 32, height: 20, mode: "side", ansi: false }).join("\n")).toMatch(/planner\s+claude\s+860k\s/);
+  });
+
   it("Thai combining marks do not count as columns", () => {
     expect(visibleWidth("ได้")).toBe(2);
   });

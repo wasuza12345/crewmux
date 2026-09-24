@@ -12,9 +12,30 @@ import { claudeTranscriptPath, codexRolloutPath, findCodexSession } from "./resu
 export interface ContextUsage {
   tokens: number;
   window?: number;
+  /**
+   * When this reading was taken (ms). A CLI writes nothing when it compacts, so a reading from
+   * before a compaction still describes the old conversation — the harness treats it as unknown.
+   */
+  at?: number;
 }
 
 const TAIL_BYTES = 512 * 1024;
+
+/** ISO timestamp → ms; anything unparseable is simply "no timestamp". */
+function isoMs(v: unknown): number | undefined {
+  if (typeof v !== "string") return undefined;
+  const ms = Date.parse(v);
+  return Number.isNaN(ms) ? undefined : ms;
+}
+
+/** Last write of the file the CLI keeps its session in — the fallback "when" for readings without one. */
+function mtimeMs(file: string): number | undefined {
+  try {
+    return statSync(file).mtimeMs;
+  } catch {
+    return undefined; // rotated away between the read and now
+  }
+}
 
 /** Last `bytes` of a file — session logs grow large and only the latest entries matter. */
 export function readTail(file: string, bytes = TAIL_BYTES): string {
@@ -47,21 +68,30 @@ function lastJsonLine(text: string, needle: string): Record<string, unknown> | u
 
 /** Claude transcript: context = input + cache read + cache creation of the latest assistant turn. */
 export function claudeUsage(transcript: string): ContextUsage | undefined {
-  const row = lastJsonLine(readTail(transcript), '"usage"') as { message?: { usage?: Record<string, number> } } | undefined;
+  const row = lastJsonLine(readTail(transcript), '"usage"') as { timestamp?: string; message?: { usage?: Record<string, number> } } | undefined;
   const u = row?.message?.usage;
   if (!u) return undefined;
-  return { tokens: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) };
+  const at = isoMs(row?.timestamp);
+  return {
+    tokens: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0),
+    ...(at !== undefined ? { at } : {}),
+  };
 }
 
 /** Codex rollout: latest token_count event → last turn's input tokens and the model window. */
 export function codexUsage(rollout: string): ContextUsage | undefined {
   const row = lastJsonLine(readTail(rollout), '"token_count"') as
-    | { payload?: { info?: { last_token_usage?: { input_tokens?: number }; model_context_window?: number } } }
+    | { timestamp?: string; payload?: { info?: { last_token_usage?: { input_tokens?: number }; model_context_window?: number } } }
     | undefined;
   const info = row?.payload?.info;
   const tokens = info?.last_token_usage?.input_tokens;
   if (tokens === undefined) return undefined;
-  return { tokens, ...(info?.model_context_window ? { window: info.model_context_window } : {}) };
+  const at = isoMs(row?.timestamp) ?? mtimeMs(rollout);
+  return {
+    tokens,
+    ...(info?.model_context_window ? { window: info.model_context_window } : {}),
+    ...(at !== undefined ? { at } : {}),
+  };
 }
 
 /** CliSpec.usage: last regex match (group 1) in a file; window fixed or from a second file. */
@@ -77,7 +107,8 @@ export function specUsage(spec: NonNullable<ReturnType<typeof effectiveCli>["cli
   const tokens = lastMatch(spec.file, spec.pattern);
   if (tokens === undefined) return undefined;
   const window = spec.window ?? (spec.windowFile && spec.windowPattern ? lastMatch(spec.windowFile, spec.windowPattern) : undefined);
-  return { tokens, ...(window ? { window } : {}) };
+  const at = mtimeMs(fill(spec.file, vars, home)); // the spec gives no timestamp — the file's last write is the reading's time
+  return { tokens, ...(window ? { window } : {}), ...(at !== undefined ? { at } : {}) };
 }
 
 /** Usage for a running session, dispatching on the vendor. */

@@ -33,14 +33,19 @@ const roleCard = (role: string) => `role-${role}`;
 export function teamBoard({ project, roles, events, now }: TeamBoardInput): Board {
   const usage = new Map<string, { tokens: number; window?: number }>();
   const compacted = new Map<string, number>();
+  const failedCompact = new Map<string, number>();
   const messages: { envelope: AgentEnvelope; ts: number; delivered?: boolean }[] = [];
   const byId = new Map<string, (typeof messages)[number]>();
   const statusOf = new Map(roles.map((r) => [r.role, r.status]));
 
   for (const e of events) {
     if (e.type === "session.status") statusOf.set(e.session.role, e.session.status);
-    else if (e.type === "session.usage") usage.set(e.role, { tokens: e.tokens, ...(e.window ? { window: e.window } : {}) });
-    else if (e.type === "session.compact") compacted.set(e.role, e.ts);
+    else if (e.type === "session.usage") {
+      if (e.tokens === undefined) usage.delete(e.role); // unknown again after a compaction — never show the old size
+      else usage.set(e.role, { tokens: e.tokens, ...(e.window ? { window: e.window } : {}) });
+    }
+    else if (e.type === "session.compact") { compacted.set(e.role, e.ts); failedCompact.delete(e.role); }
+    else if (e.type === "session.compact.failed") { compacted.delete(e.role); failedCompact.set(e.role, e.ts); }
     else if (e.type === "message") {
       const m = { envelope: e.envelope, ts: e.ts };
       messages.push(m);
@@ -75,7 +80,11 @@ export function teamBoard({ project, roles, events, now }: TeamBoardInput): Boar
     const asking = openQuestions.some((q) => q.envelope.from === role);
     const state = asking ? "asking" : running(role) ? "running" : "stopped";
     const status: BoardStatus = asking ? "blocked" : running(role) ? "active" : "todo";
-    const body = [contextText(role), compacted.has(role) ? `last compact ${hhmm(compacted.get(role)!)}` : undefined].filter(Boolean).join(" · ");
+    const body = [
+      contextText(role),
+      compacted.has(role) ? `last compact ${hhmm(compacted.get(role)!)}` : undefined,
+      failedCompact.has(role) ? `compact ${hhmm(failedCompact.get(role)!)} did not take effect` : undefined,
+    ].filter(Boolean).join(" · ");
     const cards: BoardCard[] = [{
       id: roleCard(role), title: role, status,
       ...(body ? { body } : {}),

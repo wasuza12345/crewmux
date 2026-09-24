@@ -154,6 +154,9 @@ Compacting makes the CLI summarise its own conversation.
 | automatic | `compactAt: 150000` on a role → the CLI compacts itself at that size (Claude 100k–1M, Codex any; Grok only via its own config file) |
 
 - The sidebar shows each agent's context (`74%`, or `312k` when the window is unknown), yellow above 70%, `⟳` after a compaction.
+- A CLI writes no context size when it compacts, so right after one the size is **unknown** (the sidebar keeps only `⟳`, `list_agents` and the `team` board say unknown) until that agent takes its next turn — an agent cannot ask for another compaction meanwhile; you always can.
+- The compact command is **typed** into the CLI on a line of its own, never pasted (a pasted slash command is not run); Claude's `--focus` is delivered as an ordinary message just before it.
+- If the context has not shrunk within `config.yaml → compact.verifySeconds` (default 90), crewmux reports that the compaction did not take effect — in the harness window, on the `team` board and in `list_agents` — and lets the next request through right away.
 - Agents may compact the same role at most every `config.yaml → compact.minIntervalMinutes` (default 10); you are never limited.
 - Turn agent-initiated compaction off with `compact: { ai: false }` in `config.yaml`.
 - Codex's `/compact` takes no instructions, so `--focus` is ignored for Codex.

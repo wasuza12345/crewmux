@@ -13,6 +13,8 @@ export const ProjectConfig = z.object({
     ai: z.boolean().default(true),
     /** Minimum minutes between two AI-requested compactions of the same role. */
     minIntervalMinutes: z.number().nonnegative().default(10),
+    /** Seconds to wait for a smaller context reading before reporting that a compaction never ran (0 = never report). */
+    verifySeconds: z.number().nonnegative().default(90),
   }).prefault({}),
   delivery: z.object({
     /** Wait between pasting a message and pressing Enter, so the CLI finishes handling the paste. */
@@ -55,7 +57,14 @@ export const CliSpec = z.object({
   }).prefault({}),
   /** How to compact the conversation. `command` is typed into the CLI ({focus} = optional instructions);
    *  `auto` are launch args that make the CLI compact by itself at {tokens} (roles.yaml → compactAt). */
-  compact: z.object({ command: z.string(), auto: Args.optional() }).optional(),
+  /** `focusMode`: how the instructions reach the CLI — "arg" inside the command ({focus}),
+   *  "message" as an ordinary message sent just before it (CLIs that mangle long slash commands),
+   *  "none" dropped. Default: "arg" when the command has {focus}, else "none". */
+  compact: z.object({
+    command: z.string(),
+    auto: Args.optional(),
+    focusMode: z.enum(["arg", "message", "none"]).optional(),
+  }).optional(),
   /** Where the CLI records context usage: last regex match (group 1) in `file` = tokens in context;
    *  window from `window`, or from `windowFile` + `windowPattern`. */
   usage: z.object({

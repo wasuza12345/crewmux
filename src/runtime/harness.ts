@@ -20,7 +20,7 @@ import { formatDelivery, harnessPreamble } from "./prompt.js";
 import { findCodexSession, resolveResume } from "./resume.js";
 import { prepareVendor } from "./vendor-setup.js";
 import { contextUsage, type ContextUsage } from "./usage.js";
-import { compactCommand } from "../agents/presets.js";
+import { compactCommand, compactFocusMode } from "../agents/presets.js";
 import { ToolError, type BoardAccess } from "../bridge/tools.js";
 import { teamBoard } from "./team-board.js";
 
@@ -53,7 +53,9 @@ export class Harness {
   private watcher?: NodeJS.Timeout;
   private usageTimer?: NodeJS.Timeout;
   private readonly usage = new Map<string, ContextUsage>(); // role → latest known context size
-  private readonly lastCompact = new Map<string, number>(); // role → ms of the last compaction
+  /** role → the last compaction sent: when, the size before it, and the newest size read since. */
+  private readonly compactions = new Map<string, { at: number; before?: number; after?: number }>();
+  private readonly unverified = new Map<string, { at: number; tokens?: number }>(); // role → a compaction that never shrank anything
   /** Browser credential for the board pages; one per run, never logged (written 0600 to state/board-view.json). */
   private readonly boardToken = randomBytes(32).toString("base64url");
   private readonly boards: ProjectBoards;
@@ -70,6 +72,7 @@ export class Harness {
       policy: new PathPolicy(config.policy),
       agentDir: config.dir,
       usage: (role) => this.usageOf(role),
+      contextNote: (role) => this.compactNote(role),
       compact: (by, target, focus) => this.compact(target, { by, focus }),
       boards: this.boardAccess(),
     }, onCall);
@@ -252,16 +255,23 @@ export class Harness {
     this.typeInto(target.pane, text).then(() => report(true), (err: unknown) => report(false, err instanceof Error ? err.message : String(err)));
   }
 
-  /** Paste text into a pane and submit, one at a time per pane so pastes never interleave. */
-  private typeInto(pane: string, text: string): Promise<void> {
+  /** One writer at a time per pane, so what the harness sends never interleaves. */
+  private enqueue(pane: string, send: () => Promise<void>): Promise<void> {
     const prev = this.deliveryQueues.get(pane) ?? Promise.resolve();
-    const next = prev.catch(() => undefined).then(() => tmux.pasteAndSubmit(pane, text, this.config.project.delivery.pasteDelayMs));
+    const next = prev.catch(() => undefined).then(send);
     this.deliveryQueues.set(pane, next.catch(() => undefined));
     return next;
   }
 
+  /** Paste text into a pane and submit — how ordinary messages are delivered. */
+  private typeInto(pane: string, text: string): Promise<void> {
+    return this.enqueue(pane, () => tmux.pasteAndSubmit(pane, text, this.config.project.delivery.pasteDelayMs));
+  }
+
   /**
-   * Type the CLI's own compact command into a role's session (it runs after the current turn).
+   * Run the CLI's own compact command in a role's session (it runs after the current turn).
+   * The command goes in as typed keys, alone on its line — pasted text is content, not a command —
+   * and long instructions go in as an ordinary message before it when the CLI wants them that way.
    * `by` is the requesting role or "user"; AI requests obey config.compact (ai on/off, min interval).
    */
   async compact(role: string, { by = USER, focus = "" }: { by?: string; focus?: string } = {}): Promise<void> {
@@ -271,18 +281,72 @@ export class Harness {
     const text = compactCommand(def, focus);
     if (!text) throw new ToolError(`${role} (${def.kind}) has no compact command — add cli.compact to agents/${def.id}.yaml`);
     const now = Date.now();
+    const pending = this.compactions.get(role);
     if (by !== USER) {
       const { ai, minIntervalMinutes } = this.config.project.compact;
       if (!ai) throw new ToolError("the human turned off AI compaction (config.yaml → compact.ai: false)");
-      const last = this.lastCompact.get(role);
-      if (last !== undefined && now - last < minIntervalMinutes * 60_000) {
-        const wait = Math.ceil((minIntervalMinutes * 60_000 - (now - last)) / 60_000);
+      // A CLI writes no usage line when it compacts, so the size stays unknown until its next turn.
+      // Compacting again on the old number would spend a compaction on a conversation just compacted.
+      if (pending?.before !== undefined && this.usage.get(role) === undefined) {
+        throw new ToolError(`${role} was just compacted and its new context size is not known yet — it is published once ${role} takes another turn; check list_agents then`);
+      }
+      if (pending && now - pending.at < minIntervalMinutes * 60_000) {
+        const wait = Math.ceil((minIntervalMinutes * 60_000 - (now - pending.at)) / 60_000);
         throw new ToolError(`${role} was compacted recently — try again in ${wait} min`);
       }
     }
-    this.lastCompact.set(role, now);
+    const before = this.usage.get(role)?.tokens;
+    this.compactions.set(role, { at: now, ...(before !== undefined ? { before } : {}) });
+    this.unverified.delete(role);
     this.bus.publish({ type: "session.compact", runId: this.runId, role, by, ...(focus ? { focus } : {}) });
-    await this.typeInto(s.pane, text);
+    this.forgetUsage(role);
+    if (focus && compactFocusMode(def) === "message") {
+      await this.typeInto(s.pane, `Before compacting: keep this in the summary — ${focus.replaceAll("\n", " ")}`);
+    }
+    await this.enqueue(s.pane, () => tmux.sendCommand(s.pane, text, this.config.project.delivery.pasteDelayMs));
+  }
+
+  /** The known size no longer describes this conversation — say so, so nobody shows or judges by it. */
+  private forgetUsage(role: string): void {
+    if (!this.usage.delete(role)) return;
+    this.bus.publish({ type: "session.usage", runId: this.runId, role });
+  }
+
+  /** A reading taken at or before the role's last compaction is about the conversation that was compacted away. */
+  private isFresh(role: string, u: ContextUsage): boolean {
+    const c = this.compactions.get(role);
+    return c === undefined || u.at === undefined || u.at > c.at;
+  }
+
+  /**
+   * A compaction is only real when the context shrinks. If no smaller reading turns up in
+   * `compact.verifySeconds`, say so (the CLI may have answered the command as a message) and let
+   * the next request through — an attempt that did nothing must not hold back the retry.
+   */
+  private checkCompactions(now: number): void {
+    const waitMs = this.config.project.compact.verifySeconds * 1000;
+    if (!waitMs) return;
+    for (const [role, c] of this.compactions) {
+      if (c.before === undefined || now - c.at < waitMs) continue;
+      const shrank = c.after !== undefined && c.after < c.before;
+      if (shrank) continue;
+      this.compactions.delete(role);
+      this.unverified.set(role, { at: c.at, ...(c.after !== undefined ? { tokens: c.after } : {}) });
+      this.bus.publish({
+        type: "session.compact.failed", runId: this.runId, role, waitedMs: now - c.at,
+        ...(c.after !== undefined ? { tokens: c.after } : {}),
+      });
+    }
+  }
+
+  /** What `list_agents` adds to a role's context line when its last compaction did not take. */
+  private compactNote(role: string): string | undefined {
+    const u = this.unverified.get(role);
+    if (!u) return undefined;
+    const at = new Date(u.at).toTimeString().slice(0, 5);
+    return u.tokens === undefined
+      ? `the compaction requested at ${at} is unconfirmed — no new context reading since`
+      : `the compaction requested at ${at} did not take effect (context still ${u.tokens} tokens)`;
   }
 
   /** Re-read context sizes; publish only real changes (≥ 1% of the window, or ≥ 5k tokens when the window is unknown). */
@@ -297,12 +361,19 @@ export class Harness {
       }
       const u = contextUsage(def, this.sessions.get(s.id)!);
       if (!u) continue;
+      if (!this.isFresh(s.role, u)) {
+        this.forgetUsage(s.role); // still the pre-compaction reading — keep it out of the panel, the board and list_agents
+        continue;
+      }
+      const c = this.compactions.get(s.role);
+      if (c) c.after = u.tokens; // the first size the CLI reports after the compaction proves whether it ran
       const prev = this.usage.get(s.role);
       const step = u.window ? u.window / 100 : 5000;
       if (prev && Math.abs(prev.tokens - u.tokens) < step && prev.window === u.window) continue;
       this.usage.set(s.role, u);
       this.bus.publish({ type: "session.usage", runId: this.runId, role: s.role, tokens: u.tokens, ...(u.window ? { window: u.window } : {}) });
     }
+    this.checkCompactions(Date.now());
   }
 
   /** Latest known context size of a role (for list_agents). */
@@ -371,8 +442,11 @@ export function describe(e: HarnessEvent): string {
     }
     case "message.delivery": return `${t}    ${e.ok ? "✓ delivered" : "✗ not delivered"} to ${e.to}${e.detail ? ` (${e.detail})` : ""}`;
     case "artifact.created": return `${t}  ${e.artifact.role} shared ${e.artifact.kind} ${e.artifact.id}`;
-    case "session.usage": return `${t}  ${e.role} context ${Math.round(e.tokens / 1000)}k${e.window ? ` (${Math.round((e.tokens / e.window) * 100)}%)` : ""}`;
+    case "session.usage": return e.tokens === undefined
+      ? `${t}  ${e.role} context unknown (compacted — waiting for its next turn)`
+      : `${t}  ${e.role} context ${Math.round(e.tokens / 1000)}k${e.window ? ` (${Math.round((e.tokens / e.window) * 100)}%)` : ""}`;
     case "session.compact": return `${t}  ${e.role} compact ← ${e.by}${e.focus ? ` · keep: ${e.focus.slice(0, 60)}` : ""}`;
+    case "session.compact.failed": return `${t}  ! ${e.role} compact did not take effect after ${Math.round(e.waitedMs / 1000)}s${e.tokens ? ` (context still ${Math.round(e.tokens / 1000)}k)` : " (no new reading)"}`;
     case "board.updated": return `${t}  ${e.by} updated board ${e.name}`;
   }
 }

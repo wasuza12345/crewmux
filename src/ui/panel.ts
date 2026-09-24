@@ -51,10 +51,16 @@ export function reduce(state: PanelState, e: HarnessEvent): PanelState {
       const item: FeedItem = { id: m.id, ts: e.ts, from: m.from, to: m.to, type: m.type, content: m.content, ...(m.verdict ? { verdict: m.verdict } : {}) };
       return { ...state, feed: [...state.feed, item] };
     }
-    case "session.usage":
-      return { ...state, roles: state.roles.map((r) => (r.role === e.role ? { ...r, tokens: e.tokens, ...(e.window ? { window: e.window } : {}) } : r)) };
+    case "session.usage": {
+      // No tokens = the harness no longer knows the size (the reading is older than the compaction).
+      const known = e.tokens === undefined ? { tokens: undefined, window: undefined } : { tokens: e.tokens, ...(e.window ? { window: e.window } : {}) };
+      return { ...state, roles: state.roles.map((r) => (r.role === e.role ? { ...r, ...known } : r)) };
+    }
     case "session.compact":
       return { ...state, roles: state.roles.map((r) => (r.role === e.role ? { ...r, compactedAt: e.ts } : r)) };
+    case "session.compact.failed":
+      // It never happened: drop the ⟳ so the row stops promising a smaller context.
+      return { ...state, roles: state.roles.map((r) => (r.role === e.role ? { ...r, compactedAt: undefined } : r)) };
     case "message.delivery":
       return { ...state, feed: state.feed.map((f) => (f.id === e.messageId ? { ...f, delivered: e.ok } : f)) };
     default:

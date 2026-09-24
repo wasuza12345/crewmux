@@ -200,7 +200,12 @@ When to call it — judge by the **task boundary** first, the number second:
 | a task is finished and its result reported | mid-task (debugging, waiting for test output) |
 | before unrelated new work | while waiting for an answer that needs the details |
 | after reading long logs/diffs you no longer need | right after a compaction (AI requests are rate-limited, `config.yaml → compact.minIntervalMinutes`) |
-| `list_agents` shows the context above ~70% | |
+| `list_agents` shows the context above ~70% | while the context reads `unknown` |
+
+A CLI writes no context size when it compacts, so right after one `list_agents`, the sidebar (`⟳`) and
+the `team` board show the size as **unknown** until that agent takes its next turn — a second request
+while it is unknown is refused, and does not count against the interval. If the size never shrinks,
+`list_agents` says the compaction did not take effect (the CLI answered it as a message): send it again.
 
 Before compacting, make what matters survive: decisions, file paths, open TODOs and pending message
 ids go into `focus` (Codex ignores `focus` — send them to yourself or share them with `report_artifact`
@@ -210,6 +215,8 @@ first). The human can turn AI compaction off with `compact: { ai: false }` in `c
 ```yaml
 cli:
   compact: { command: "/compact {focus}", auto: ["--autocompact", "{tokens}"] }   # auto is optional
+  # focusMode: arg (default with {focus}) | message (sent just before the command) | none
+  # The command is typed in as keys on its own line, never pasted — a pasted slash command is not run.
   usage:   { file: "~/.mycli/sessions/{id}.jsonl", pattern: '"input_tokens":(\d+)', window: 200000 }
 ```
 `usage` lets `list_agents` and the sidebar show the context size (last regex match, group 1). Without

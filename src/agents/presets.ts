@@ -11,7 +11,9 @@ export const PRESETS: Partial<Record<AgentDefinition["kind"], { command: string;
   // their presets only describe compaction, which is plain data.
   claude: {
     command: "claude",
-    cli: { mcp: { args: [] }, allow: [], compact: { command: "/compact {focus}", auto: ["--autocompact", "{tokens}"] } },
+    // Claude Code runs a slash command only when it is typed on its own line; a long "/compact <focus>"
+    // is answered as a message instead. The focus goes in as an ordinary message just before it.
+    cli: { mcp: { args: [] }, allow: [], compact: { command: "/compact", focusMode: "message", auto: ["--autocompact", "{tokens}"] } },
   },
   codex: {
     command: "codex",
@@ -69,11 +71,19 @@ export function autoCompactArgs(def: AgentDefinition, tokens: number | undefined
   return auto.map((a) => fill(a, { tokens: String(tokens) }, home));
 }
 
-/** The text typed into the CLI to compact now, or undefined if the CLI cannot. */
+/** Where a compaction's `focus` goes for this CLI: into the command, into a message before it, or nowhere. */
+export function compactFocusMode(def: AgentDefinition): "arg" | "message" | "none" {
+  const spec = effectiveCli(def).cli?.compact;
+  if (!spec) return "none";
+  return spec.focusMode ?? (spec.command.includes("{focus}") ? "arg" : "none");
+}
+
+/** The text typed into the CLI to compact now, or undefined if the CLI cannot. `focus` only when it goes in as an arg. */
 export function compactCommand(def: AgentDefinition, focus: string): string | undefined {
   const cmd = effectiveCli(def).cli?.compact?.command;
   if (!cmd) return undefined;
-  return cmd.replace("{focus}", focus.replaceAll("\n", " ")).trimEnd();
+  const arg = compactFocusMode(def) === "arg" ? focus.replaceAll("\n", " ") : "";
+  return cmd.replace("{focus}", arg).trimEnd();
 }
 
 /** Fill {placeholders}; "~/" → home. Pure given `home`. */

@@ -16,6 +16,7 @@ import type { HarnessEvent } from "../src/protocol/index.js";
 
 const hasTmux = (() => { try { execFileSync("tmux", ["-V"]); return true; } catch { return false; } })();
 const FAKE = resolve(import.meta.dirname, "fixtures/fake-agent.mjs");
+const PROBE = resolve(import.meta.dirname, "fixtures/paste-probe.mjs");
 const SESSION = "crewmux-e2e";
 const REPO = resolve(import.meta.dirname, "..");
 const CLI = `${REPO}/node_modules/.bin/tsx ${REPO}/src/cli.ts`; // what the tmux key bindings run
@@ -51,8 +52,13 @@ describe.skipIf(!hasTmux)("e2e: native CLIs in tmux, talking through the harness
     writeFileSync(join(root, ".crewmux/agents/fake.yaml"), [
       "id: fake", "kind: custom", `command: ${FAKE}`, // executable (shebang), so CLI flags follow it like a real CLI's
       "cli:", "  session: { new: ['--sid', '{id}'], resume: ['--sid', '{id}'] }",
-      "  compact: { command: '/compact {focus}' }",
+      "  compact: { command: '/compact', focusMode: message }", // like Claude: a bare slash command, focus sent as a message
       `  usage: { file: '${root}/usage-{id}.txt', pattern: 'tokens=(\\d+)', window: 100000 }`, "",
+    ].join("\n"));
+    // Records the bytes its pane receives, with bracketed paste on — the only way to tell a paste from typed keys.
+    writeFileSync(join(root, ".crewmux/agents/probe.yaml"), [
+      "id: probe", "kind: custom", `command: ${PROBE}`,
+      "cli:", "  compact: { command: '/compact', focusMode: message }", "",
     ].join("\n"));
     writeFileSync(join(root, ".crewmux/roles.yaml"), "roles:\n  planner: { agent: fake, prompt: planner.md }\n  coder: { agent: fake, prompt: coder.md }\n");
     await tmux.newSession(SESSION, "harness", root, ["sleep", "600"]);
@@ -169,21 +175,87 @@ describe.skipIf(!hasTmux)("e2e: native CLIs in tmux, talking through the harness
     await waitFor("planner ready again", async () => (await tmux.capturePane(after.pane)).includes("ready role=planner"));
   });
 
-  it("compact: the CLI's own command is typed into the pane; AI requests are rate-limited, the user's are not", async () => {
-    const planner = harness.sessions.byRole("planner")!;
-    await harness.compact("planner", { by: "coder", focus: "keep the API decision" });
-    await waitFor("compact typed", async () => (await tmux.capturePane(planner.pane)).includes("got: /compact keep the API decision"));
-    await expect(harness.compact("planner", { by: "coder" })).rejects.toThrow(/compacted recently/);
-    await harness.compact("planner", { focus: "user override" }); // the human is never rate-limited
-    await waitFor("second compact typed", async () => (await tmux.capturePane(planner.pane)).includes("got: /compact user override"));
-    expect(events.filter((e) => e.type === "session.compact").map((e) => e.type === "session.compact" && e.by)).toEqual(["coder", "user"]);
-  });
-
   it("usage: read from the file the CLI spec points at, published as events", async () => {
     const planner = harness.sessions.byRole("planner")!;
     writeFileSync(join(root, `usage-${planner.providerSessionId}.txt`), "tokens=1000\ntokens=72000\n");
     await waitFor("usage event", () => events.some((e) => e.type === "session.usage" && e.role === "planner" && e.tokens === 72000 && e.window === 100000));
-    expect(harness.usageOf("planner")).toEqual({ tokens: 72000, window: 100000 });
+    expect(harness.usageOf("planner")).toMatchObject({ tokens: 72000, window: 100000 });
+  });
+
+  it("compact: the command runs on its own line, the focus arrives as a message before it; AI requests are rate-limited, the user's are not", async () => {
+    const planner = harness.sessions.byRole("planner")!;
+    const usageFile = join(root, `usage-${planner.providerSessionId}.txt`);
+    await harness.compact("planner", { by: "coder", focus: "keep the API decision" });
+    await waitFor("focus + compact typed", async () => {
+      const pane = await tmux.capturePane(planner.pane);
+      return pane.includes("got: Before compacting: keep this in the summary — keep the API decision") && pane.includes("got: /compact");
+    });
+    // The size read before the compaction says nothing about the conversation that is left.
+    expect(harness.usageOf("planner")).toBeUndefined();
+    expect(events.some((e) => e.type === "session.usage" && e.role === "planner" && e.tokens === undefined)).toBe(true);
+    // An agent must not spend a second compaction on a size it cannot see yet...
+    await expect(harness.compact("planner", { by: "coder" })).rejects.toThrow(/just compacted/);
+    // ...and the refused request sent nothing, so it must not move the min-interval clock either.
+    writeFileSync(usageFile, "tokens=9000\n");
+    await waitFor("smaller size read", () => harness.usageOf("planner") !== undefined);
+    await expect(harness.compact("planner", { by: "coder" })).rejects.toThrow(/compacted recently/);
+    await harness.compact("planner", { focus: "user override" }); // the human is never rate-limited
+    await waitFor("second compact typed", async () => (await tmux.capturePane(planner.pane)).includes("got: Before compacting: keep this in the summary — user override"));
+    expect(events.filter((e) => e.type === "session.compact").map((e) => e.type === "session.compact" && e.by)).toEqual(["coder", "user"]);
+  });
+
+  it("a compaction that never shrinks the context is reported instead of believed", async () => {
+    // Its own project (and harness) so the short verification window stays out of the other tests.
+    const root2 = mkdtempSync(join(tmpdir(), "harness-verify-"));
+    mkdirSync(join(root2, ".crewmux/agents"), { recursive: true });
+    writeFileSync(join(root2, ".crewmux/config.yaml"), "version: 1\nproject: verify\ndelivery: { pasteDelayMs: 50 }\ncompact: { minIntervalMinutes: 0, verifySeconds: 1 }\n");
+    writeFileSync(join(root2, ".crewmux/agents/fake.yaml"), [
+      "id: fake", "kind: custom", `command: ${FAKE}`,
+      "cli:", "  session: { new: ['--sid', '{id}'], resume: ['--sid', '{id}'] }",
+      "  compact: { command: '/compact' }",
+      `  usage: { file: '${root2}/usage-{id}.txt', pattern: 'tokens=(\\d+)', window: 100000 }`, "",
+    ].join("\n"));
+    writeFileSync(join(root2, ".crewmux/policy.yaml"), "paths: { deny: [] }\n");
+    writeFileSync(join(root2, ".crewmux/roles.yaml"), "roles:\n  writer: { agent: fake }\n");
+    const second = new Harness(loadConfig(root2), { tmuxSession: SESSION, watchIntervalMs: 200, usageIntervalMs: 200 });
+    const seen: HarnessEvent[] = [];
+    second.bus.subscribe((e) => seen.push(e));
+    await second.start();
+    try {
+      const writer = await second.launch("writer");
+      const usageFile = join(root2, `usage-${writer.providerSessionId}.txt`);
+      writeFileSync(usageFile, "tokens=81000\n");
+      await waitFor("size before", () => second.usageOf("writer")?.tokens === 81000);
+      await second.compact("writer", { by: "planner" });
+      writeFileSync(usageFile, "tokens=82000\n"); // the CLI answered the command instead of compacting
+      await waitFor("failure published", () => seen.some((e) => e.type === "session.compact.failed" && e.role === "writer" && e.tokens === 82000));
+      expect(second.teamBoard().columns.find((c) => c.title === "writer")!.cards[0]!.body).toMatch(/did not take effect/);
+      await second.compact("writer", { by: "planner" }); // an attempt that did nothing must not block the retry
+    } finally {
+      await second.stop();
+    }
+  });
+
+  it("compact is typed as keys, never pasted: a CLI in bracketed-paste mode gets a bare /compact line", async () => {
+    writeFileSync(join(root, ".crewmux/roles.yaml"), [
+      "roles:", "  planner: { agent: fake, prompt: planner.md }", "  coder: { agent: fake, prompt: coder.md }",
+      "  tester: { agent: fake, autostart: false }", "  newbie: { agent: fake, autostart: false }",
+      "  probe: { agent: probe, autostart: false }", "",
+    ].join("\n"));
+    const probe = await harness.launch("probe", { reload: true });
+    await waitFor("probe ready", async () => (await tmux.capturePane(probe.pane)).includes("ready probe"));
+    const log = join(root, "probe-probe.log");
+    await harness.compact("probe", { focus: "keep the migration plan" });
+    await waitFor("compact received", () => existsSync(log) && readFileSync(log, "utf8").includes("/compact"));
+
+    const got = readFileSync(log, "utf8");
+    const pasted = got.indexOf("\u001b[200~"); // bracketed paste: how ordinary messages arrive
+    expect(pasted).toBeGreaterThanOrEqual(0);
+    expect(got.slice(pasted)).toContain("keep the migration plan");
+    const command = got.indexOf("/compact");
+    expect(command).toBeGreaterThan(pasted); // the instructions first, the command after them
+    expect(got.slice(command)).toBe("/compact\r"); // typed, unwrapped, alone on its line — a pasted one is never run
+    await harness.close("probe");
   });
 
   it("the C-b n binding's command really opens a role when tmux runs it", { timeout: 30000 }, async () => {
